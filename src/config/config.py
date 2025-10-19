@@ -106,6 +106,11 @@ DEFAULT_ASR_MODEL = "mlx-community/whisper-large-v3-turbo"
 # WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo" # Or choose another compatible model
 # WHISPER_MODEL = "mlx-community/parakeet-tdt-0.6b-v2" # Or choose another compatible model
 DEFAULT_LLM = "mlx-community/Qwen3-8B-4bit"
+
+# LLM catalog
+MXFP4_MODEL_KEY = "GPT-OSS-20B-MXFP4-Q4"
+MXFP4_MODEL_ID = "mlx-community/gpt-oss-20b-MXFP4-Q4"
+
 AVAILABLE_LLMS = {
     "Qwen3-8B-4bit": "mlx-community/Qwen3-8B-4bit",
     "Qwen3-14B-4bit-AWQ": "mlx-community/Qwen3-14B-4bit-AWQ",
@@ -116,7 +121,18 @@ AVAILABLE_LLMS = {
     # Expected benefits: Enhanced reasoning, chain-of-thought, configurable reasoning levels
     # Memory requirements: ~13GB RAM usage, 20.9B parameters
     # Features: Analysis channel for reasoning visibility, professional text enhancement
+    MXFP4_MODEL_KEY: MXFP4_MODEL_ID,  # MLX-native MXFP4 quantization, see docs/mlx_upgrade_mxfp4_notes.md
     # Add other models as needed
+}
+
+# Optional display metadata for Electron UI
+LLM_DISPLAY_NAMES = {
+    MXFP4_MODEL_KEY: "GPT-OSS-20B-MXFP4-Q4 (mlx-lm ≥0.28.3, ~15GB RAM)",
+}
+
+# Minimum mlx-lm versions required for specific models
+LLM_MIN_MLX_LM_VERSION = {
+    MXFP4_MODEL_KEY: "0.28.3",
 }
 
 # --- Prompts ---

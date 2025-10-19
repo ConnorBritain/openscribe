@@ -8,6 +8,13 @@ import json
 import re
 from typing import Optional, Callable
 
+from packaging import version
+
+try:
+    from importlib import metadata as importlib_metadata
+except ImportError:  # pragma: no cover - Python <3.8 compatibility shim
+    import importlib_metadata  # type: ignore
+
 # Make mlx_lm imports conditional for CI compatibility
 try:
     from mlx_lm import load, stream_generate
@@ -52,6 +59,16 @@ from src.config.settings_manager import SettingsManager
 from src.professional_text_formatter import ProfessionalTextFormatter
 from src.llm.gpt_oss_parser import GPTOssParser, GPTOssStreamingParser, parse_gpt_oss_stream, create_gpt_oss_chat_prompt
 
+try:
+    from huggingface_hub import snapshot_download
+    from huggingface_hub.utils import LocalEntryNotFoundError
+    HF_SNAPSHOT_AVAILABLE = True
+except ImportError:
+    HF_SNAPSHOT_AVAILABLE = False
+    snapshot_download = None  # type: ignore
+    class LocalEntryNotFoundError(Exception):
+        pass
+
 
 class LLMHandler:
     """Handles loading and interacting with MLX Language Models for text processing."""
@@ -75,6 +92,8 @@ class LLMHandler:
         self._selected_letter_model_id = None
         self._pending_request = None
         self.generation_params = {"max_tokens": config.LLM_MAX_TOKENS_TO_GENERATE}
+        self._installed_mlx_lm_version = self._detect_mlx_lm_version()
+        self._model_support_cache = {}
         
         # Initialize professional text formatter
         self._professional_formatter = ProfessionalTextFormatter()
@@ -82,7 +101,7 @@ class LLMHandler:
         # Initialize GPT-OSS parsers
         self._gpt_oss_parser = GPTOssParser()
         self._gpt_oss_streaming_parser = GPTOssStreamingParser()
-        
+
         # Log initialization and check for dependencies
         if not MLX_LM_AVAILABLE:
             log_text("LLM_HANDLER_INIT", "LLM handler initialized in CI mode - mlx_lm not available")
@@ -91,6 +110,149 @@ class LLMHandler:
                 "LLM_HANDLER_INIT",
                 f"Initialized. Proofing prompt: '{self._proofing_prompt[:50]}...', Letter prompt: '{self._letter_prompt[:50]}...'",
             )
+
+    @staticmethod
+    def _ensure_hf_offline_env():
+        current = os.getenv("HF_HUB_OFFLINE", "").lower()
+        if current not in {"1", "true", "yes"}:
+            os.environ["HF_HUB_OFFLINE"] = "1"
+
+    @staticmethod
+    def _detect_mlx_lm_version() -> Optional[str]:
+        """
+        Determine the installed mlx-lm version without crashing when the module is missing.
+        """
+        try:
+            module = sys.modules.get("mlx_lm")
+            if module:
+                detected = getattr(module, "__version__", None)
+                if detected:
+                    return str(detected)
+        except Exception:
+            pass
+
+        try:
+            return importlib_metadata.version("mlx-lm")
+        except importlib_metadata.PackageNotFoundError:
+            return None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _model_key_from_id(model_id: Optional[str]) -> Optional[str]:
+        if not model_id:
+            return None
+        for key, value in getattr(config, "AVAILABLE_LLMS", {}).items():
+            if value == model_id:
+                return key
+        return None
+
+    def _is_model_supported(self, model_key: Optional[str]) -> bool:
+        if not model_key:
+            return False
+
+        requirements = getattr(config, "LLM_MIN_MLX_LM_VERSION", {})
+        min_version = requirements.get(model_key)
+        if not min_version:
+            return True
+
+        cache_key = (model_key, min_version)
+        if cache_key in self._model_support_cache:
+            return self._model_support_cache[cache_key]
+
+        installed = self._installed_mlx_lm_version
+        if not installed:
+            result = False
+        else:
+            try:
+                result = version.parse(str(installed)) >= version.parse(str(min_version))
+            except Exception:
+                result = False
+
+        self._model_support_cache[cache_key] = result
+        return result
+
+    def _get_local_llm_dir(self, model_repo_id: str) -> Optional[str]:
+        local_dir = os.path.join(
+            config.MODELS_ROOT,
+            model_repo_id.replace("/", os.sep),
+        )
+        if not os.path.isdir(local_dir):
+            return None
+        config_path = os.path.join(local_dir, "config.json")
+        if not os.path.exists(config_path):
+            return None
+        has_weights = any(
+            fname.endswith((".safetensors", ".bin", ".mlx"))
+            for fname in os.listdir(local_dir)
+        )
+        if not has_weights:
+            return None
+        return local_dir
+
+    def _prepare_local_llm_snapshot(self, model_repo_id: str, *, local_files_only: bool = False) -> Optional[str]:
+        if not HF_SNAPSHOT_AVAILABLE:
+            return None
+        local_dir = self._get_local_llm_dir(model_repo_id)
+        if local_dir:
+            return local_dir
+
+        target_dir = os.path.join(
+            config.MODELS_ROOT,
+            model_repo_id.replace("/", os.sep),
+        )
+        os.makedirs(os.path.dirname(target_dir), exist_ok=True)
+
+        kwargs = {
+            "repo_id": model_repo_id,
+            "local_dir": target_dir,
+            "local_dir_use_symlinks": False,
+        }
+        if local_files_only or os.getenv("HF_HUB_OFFLINE", "").lower() in {"1", "true", "yes"}:
+            kwargs["local_files_only"] = True
+
+        try:
+            snapshot_dir = snapshot_download(**kwargs)
+        except LocalEntryNotFoundError as exc:
+            if kwargs.get("local_files_only"):
+                raise RuntimeError(
+                    f"Model '{model_repo_id}' not found in local Hugging Face cache. "
+                    f"Place the files under '{target_dir}' or allow downloads."
+                ) from exc
+            raise
+
+        if not os.path.isdir(snapshot_dir):
+            os.makedirs(snapshot_dir, exist_ok=True)
+        return snapshot_dir
+
+    def _resolve_model_path(self, model_repo_id: str, model_key: str, *, local_files_only: bool = False) -> str:
+        """Prefer a bundled local copy of the model to avoid stalled network calls."""
+        if not model_repo_id:
+            return model_repo_id
+        local_dir = self._get_local_llm_dir(model_repo_id)
+        if local_dir:
+            self._log_status(
+                f"Using bundled LLM weights for '{model_key}' from: {local_dir}",
+                "grey",
+            )
+            log_text(
+                "LLM_LOCAL_CACHE",
+                f"Resolved '{model_repo_id}' to local path: {local_dir}",
+            )
+            self._ensure_hf_offline_env()
+            return local_dir
+        if local_files_only:
+            prepared_dir = self._prepare_local_llm_snapshot(
+                model_repo_id, local_files_only=True
+            )
+            if prepared_dir:
+                self._log_status(
+                    f"Using cached LLM snapshot for '{model_key}' from: {prepared_dir}",
+                    "grey",
+                )
+                self._ensure_hf_offline_env()
+                return prepared_dir
+        return model_repo_id
 
     def _strip_think_tags(self, text: str) -> str:
         """Remove any <think>...</think> or Chinese variants from text (robust, multiline)."""
@@ -116,7 +278,11 @@ class LLMHandler:
                 )
 
     def _load_model_worker(
-        self, model_key: str, model_path: str, on_load_complete: callable
+        self,
+        model_key: str,
+        model_repo_id: str,
+        model_path: str,
+        on_load_complete: callable,
     ):
         log_text("LOAD_MODEL_WORKER", f"Worker started for model: {model_key}")
         load_start_time = time.time()
@@ -164,26 +330,56 @@ class LLMHandler:
                 self._log_status(
                     f"Loading LLM: {model_key} ({model_path})...", "orange"
                 )
-                
-                try:
-                    # Attempt to load model with tqdm protection
-                    self._model, self._tokenizer = load(model_path)
-                except AttributeError as e:
-                    if "tqdm" in str(e) and "_lock" in str(e):
-                        # Known tqdm threading issue in CI - retry with different approach
-                        log_text("LOAD_MODEL_WARNING", f"tqdm threading issue detected, retrying: {e}")
-                        time.sleep(0.5)  # Brief pause to let threads settle
-                        
-                        # Retry once more
-                        try:
-                            self._model, self._tokenizer = load(model_path)
-                        except Exception as retry_error:
-                            # If retry fails, re-raise original error
-                            log_text("LOAD_MODEL_ERROR", f"Model load retry failed: {retry_error}")
-                            raise e
-                    else:
-                        # Re-raise non-tqdm AttributeErrors
-                        raise e
+
+                os.environ.setdefault("HF_HUB_HTTP_TIMEOUT", "5")
+                fallback_attempted = False
+                while True:
+                    try:
+                        # Attempt to load model with tqdm protection
+                        self._model, self._tokenizer = load(model_path)
+                        break
+                    except AttributeError as e:
+                        if "tqdm" in str(e) and "_lock" in str(e):
+                            # Known tqdm threading issue in CI - retry with different approach
+                            log_text("LOAD_MODEL_WARNING", f"tqdm threading issue detected, retrying: {e}")
+                            time.sleep(0.5)  # Brief pause to let threads settle
+
+                            # Retry once more
+                            try:
+                                self._model, self._tokenizer = load(model_path)
+                            except Exception as retry_error:
+                                # If retry fails, re-raise original error
+                                log_text("LOAD_MODEL_ERROR", f"Model load retry failed: {retry_error}")
+                                raise e
+                        else:
+                            # Re-raise non-tqdm AttributeErrors
+                            if fallback_attempted:
+                                raise e
+                            fallback_attempted = True
+                            self._log_status(
+                                "Retrying LLM load using cached snapshot (tqdm AttributeError)",
+                                "orange",
+                            )
+                            model_path = self._resolve_model_path(
+                                model_repo_id,
+                                model_key,
+                                local_files_only=True,
+                            )
+                            continue
+                    except Exception as load_error:
+                        if fallback_attempted:
+                            raise load_error
+                        fallback_attempted = True
+                        self._log_status(
+                            "LLM load failed, attempting offline cache fallback",
+                            "orange",
+                        )
+                        model_path = self._resolve_model_path(
+                            model_repo_id,
+                            model_key,
+                            local_files_only=True,
+                        )
+                        continue
                 
                 self._current_model_name = model_key
                 success = True
@@ -236,12 +432,13 @@ class LLMHandler:
                 on_load_complete(False)
             return False
 
-        model_path = config.AVAILABLE_LLMS[model_key]
+        model_repo_id = config.AVAILABLE_LLMS[model_key]
+        model_path = self._resolve_model_path(model_repo_id, model_key)
         # In light mode, short-circuit to the worker to set mock handles quickly
         if os.getenv("CT_LIGHT_MODE", "0") == "1":
             threading.Thread(
                 target=self._load_model_worker,
-                args=(model_key, model_path, on_load_complete),
+                args=(model_key, model_repo_id, model_path, on_load_complete),
                 daemon=True,
             ).start()
             return True
@@ -255,7 +452,7 @@ class LLMHandler:
         log_text("LOAD_MODEL", f"Starting background thread to load model: {model_key}")
         thread = threading.Thread(
             target=self._load_model_worker,
-            args=(model_key, model_path, on_load_complete),
+            args=(model_key, model_repo_id, model_path, on_load_complete),
             daemon=True,
         )
         thread.start()
@@ -896,27 +1093,73 @@ class LLMHandler:
     def update_selected_models(self, proofing_model_id: str, letter_model_id: str):
         changed = False
         if proofing_model_id and self._selected_proofing_model_id != proofing_model_id:
-            self._selected_proofing_model_id = proofing_model_id
-            log_text(
-                "LLM_CONFIG", f"Selected proofing model set to ID: {proofing_model_id}"
-            )
-            # Emit concise stdout line indicating model selection
-            try:
-                print(f"MODEL_SELECTED:proof:{proofing_model_id}", flush=True)
-            except Exception:
-                pass
-            changed = True
+            proofing_key = self._model_key_from_id(proofing_model_id)
+            if proofing_key and not self._is_model_supported(proofing_key):
+                min_required = getattr(
+                    config, "LLM_MIN_MLX_LM_VERSION", {}
+                ).get(proofing_key)
+                fallback_id = self._selected_proofing_model_id or config.DEFAULT_LLM
+                self._log_status(
+                    f"Model '{proofing_key}' requires mlx-lm {min_required}+; keeping current proofing model.",
+                    "orange",
+                )
+                log_text(
+                    "LLM_CONFIG_WARN",
+                    f"Rejected proofing model '{proofing_key}' - installed mlx-lm version "
+                    f"'{self._installed_mlx_lm_version or 'unknown'}' below requirement '{min_required}'.",
+                )
+                if not self._selected_proofing_model_id:
+                    self._selected_proofing_model_id = fallback_id
+                    changed = True
+                    log_text(
+                        "LLM_CONFIG_WARN",
+                        f"Proofing model fallback applied: '{fallback_id}'",
+                    )
+            else:
+                self._selected_proofing_model_id = proofing_model_id
+                log_text(
+                    "LLM_CONFIG", f"Selected proofing model set to ID: {proofing_model_id}"
+                )
+                # Emit concise stdout line indicating model selection
+                try:
+                    print(f"MODEL_SELECTED:proof:{proofing_model_id}", flush=True)
+                except Exception:
+                    pass
+                changed = True
 
         if letter_model_id and self._selected_letter_model_id != letter_model_id:
-            self._selected_letter_model_id = letter_model_id
-            log_text(
-                "LLM_CONFIG", f"Selected letter model set to ID: {letter_model_id}"
-            )
-            try:
-                print(f"MODEL_SELECTED:letter:{letter_model_id}", flush=True)
-            except Exception:
-                pass
-            changed = True
+            letter_key = self._model_key_from_id(letter_model_id)
+            if letter_key and not self._is_model_supported(letter_key):
+                min_required = getattr(
+                    config, "LLM_MIN_MLX_LM_VERSION", {}
+                ).get(letter_key)
+                fallback_id = self._selected_letter_model_id or config.DEFAULT_LLM
+                self._log_status(
+                    f"Model '{letter_key}' requires mlx-lm {min_required}+; keeping current letter model.",
+                    "orange",
+                )
+                log_text(
+                    "LLM_CONFIG_WARN",
+                    f"Rejected letter model '{letter_key}' - installed mlx-lm version "
+                    f"'{self._installed_mlx_lm_version or 'unknown'}' below requirement '{min_required}'.",
+                )
+                if not self._selected_letter_model_id:
+                    self._selected_letter_model_id = fallback_id
+                    changed = True
+                    log_text(
+                        "LLM_CONFIG_WARN",
+                        f"Letter model fallback applied: '{fallback_id}'",
+                    )
+            else:
+                self._selected_letter_model_id = letter_model_id
+                log_text(
+                    "LLM_CONFIG", f"Selected letter model set to ID: {letter_model_id}"
+                )
+                try:
+                    print(f"MODEL_SELECTED:letter:{letter_model_id}", flush=True)
+                except Exception:
+                    pass
+                changed = True
 
         if changed:
             self._log_status(
@@ -933,8 +1176,15 @@ class LLMHandler:
         if hasattr(config, "AVAILABLE_LLMS") and isinstance(
             config.AVAILABLE_LLMS, dict
         ):
+            display_names = getattr(config, "LLM_DISPLAY_NAMES", {})
+            min_versions = getattr(config, "LLM_MIN_MLX_LM_VERSION", {})
             for name, model_id_path in config.AVAILABLE_LLMS.items():
-                models_list.append({"id": model_id_path, "name": name})
+                label = display_names.get(name, name)
+                min_required = min_versions.get(name)
+                if min_required and not self._is_model_supported(name):
+                    if "mlx" not in label.lower():
+                        label = f"{label} (requires mlx-lm {min_required}+ upgrade)"
+                models_list.append({"id": model_id_path, "name": label})
         else:
             log_text(
                 "LLM_CONFIG_ERROR", "config.AVAILABLE_LLMS not found or not a dict."

@@ -149,7 +149,7 @@ class FrontendBackendIntegrationTest(unittest.TestCase):
         """Test that tray icon state management works correctly."""
         
         # Check electron_tray.js exists and has proper functions
-        tray_file = self.project_root / "electron_tray.js"
+        tray_file = self.project_root / "electron" / "electron_tray.js"
         self.assertTrue(tray_file.exists(), "electron_tray.js not found")
         
         with open(tray_file, 'r') as f:
@@ -171,7 +171,7 @@ class FrontendBackendIntegrationTest(unittest.TestCase):
     def test_electron_python_status_processing(self):
         """Test that electron_python.js properly processes STATUS messages for tray updates."""
         
-        electron_python_file = self.project_root / "electron_python.js"
+        electron_python_file = self.project_root / "electron" / "electron_python.js"
         self.assertTrue(electron_python_file.exists(), "electron_python.js not found")
         
         with open(electron_python_file, 'r') as f:

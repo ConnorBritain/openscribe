@@ -320,7 +320,7 @@ class TestAudioVisualFeedback(unittest.TestCase):
     def test_electron_message_forwarding_preserved(self):
         """Test that Electron still forwards AUDIO_AMP messages to renderer after log cleanup."""
         
-        electron_python_file = self.project_root / "electron_python.js"
+        electron_python_file = self.project_root / "electron" / "electron_python.js"
         self.assertTrue(electron_python_file.exists(), "electron_python.js not found")
         
         with open(electron_python_file, 'r') as f:

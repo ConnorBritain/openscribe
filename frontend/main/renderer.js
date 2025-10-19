@@ -7,6 +7,7 @@ import { logMessage } from '../shared/renderer_utils.js';
 import { initializeExpansionUi } from '../shared/renderer_expansion_ui.js';
 import { initializeStatusIndicator } from '../shared/renderer_state.js';
 import { initializeControls } from '../shared/renderer_controls.js';
+import { initializePasteProofUi } from '../shared/renderer_paste_proof.js';
 
 // Initialize modules
 registerIPCHandlers();
@@ -18,7 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
   console.log('[Renderer] DOM loaded, initializing status indicator to grey');
   initializeStatusIndicator();
   initializeControls();
+  initializePasteProofUi();
 });
 
 logMessage('Renderer process started.');
-

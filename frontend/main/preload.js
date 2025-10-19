@@ -33,6 +33,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Send resize window request to main process
   resizeWindow: (data) => ipcRenderer.send('resize-window', data),
 
+  // Send pasted text to backend for proof formatting
+  proofPaste: (payload) => ipcRenderer.invoke('proof-paste', payload),
+
   // Clean up listeners when they are no longer needed (important!)
   removeListener: (channel) => ipcRenderer.removeAllListeners(channel),
 

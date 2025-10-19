@@ -131,6 +131,7 @@ import json
 
 try:
     from huggingface_hub import snapshot_download
+    from huggingface_hub.utils import LocalEntryNotFoundError
     HUGGINGFACE_HUB_AVAILABLE = True
 except ImportError:
     HUGGINGFACE_HUB_AVAILABLE = False
@@ -152,6 +153,8 @@ except ImportError:
                 json.dump({"sample_rate": 16000, "mock": True}, f)
         
         return mock_dir
+    class LocalEntryNotFoundError(Exception):
+        pass
 
 # Import configuration constants
 from src.config import config
@@ -183,7 +186,9 @@ class TranscriptionHandler:
         self.on_status_update = on_status_update_callback
         self._temp_folder = config.TEMP_AUDIO_FOLDER
         self._sample_rate = config.SAMPLE_RATE
-        
+        self.local_model_path_prepared = None
+        self.parakeet_model = None
+
         # Use provided model, or saved settings, or config default (in that order)
         if selected_asr_model:
             self.selected_asr_model = selected_asr_model
@@ -207,15 +212,24 @@ class TranscriptionHandler:
         if self.model_type == "whisper":
             self._whisper_backend = self._detect_whisper_backend(self.selected_asr_model)
             self._log_status(f"Selected whisper backend: {self._whisper_backend}", "grey")
-        
+
         # Light mode to avoid heavy model loads (set CT_LIGHT_MODE=1 to enable)
         self._light_mode = os.getenv("CT_LIGHT_MODE", "0") == "1"
         if self._light_mode:
             self._log_status("CT_LIGHT_MODE enabled - skipping heavy ASR model loads", "orange")
             self.parakeet_model = None
             self.local_model_path_prepared = "./mock_model_path"
-        
-        
+ 
+        # Prefer bundled/local copies of models to avoid network calls when firewalled
+        if not getattr(self, "local_model_path_prepared", None) or self.local_model_path_prepared == "./mock_model_path":
+            bundled_path = self._get_local_model_dir(self.selected_asr_model)
+            if bundled_path:
+                self.local_model_path_prepared = bundled_path
+                self._log_status(
+                    f"Using bundled ASR model from: {bundled_path}", "grey"
+                )
+                self._ensure_hf_offline_env()
+
         # Load Parakeet model if needed (skip in light mode)
         if not self._light_mode:
             if self.model_type == "parakeet" and PARAKEET_MLX_AVAILABLE:
@@ -251,9 +265,15 @@ class TranscriptionHandler:
 
         # For Whisper models using MLX backend, let mlx_whisper handle downloads from repo id
         if self.model_type == "whisper" and self._whisper_backend == "mlx" and not self._light_mode:
-            self.local_model_path_prepared = self.selected_asr_model  # pass repo id directly
+            if not getattr(self, "local_model_path_prepared", None) or self.local_model_path_prepared == "./mock_model_path":
+                self.local_model_path_prepared = self.selected_asr_model  # fall back to repo id
+            target_display = (
+                self.local_model_path_prepared
+                if self.local_model_path_prepared != self.selected_asr_model
+                else f"repo:{self.selected_asr_model}"
+            )
             self._log_status(
-                f"Using MLX repo id for Whisper: {self.local_model_path_prepared} (mlx_whisper will download if needed)",
+                f"Preparing Whisper backend with: {target_display}",
                 "grey",
             )
         elif not self._light_mode and self.model_type == "parakeet":
@@ -287,7 +307,17 @@ class TranscriptionHandler:
             self._log_status("ASR update in CI mode - dependencies mocked", "orange")
             self.local_model_path_prepared = "./mock_model_path"
             return
-        
+
+        # Prefer bundled assets if available when switching models
+        bundled_path = self._get_local_model_dir(self.selected_asr_model)
+        if bundled_path:
+            self.local_model_path_prepared = bundled_path
+            self._log_status(
+                f"Using bundled ASR model from: {bundled_path}", "grey"
+            )
+            self._ensure_hf_offline_env()
+            return
+
         try:
             if self.model_type == "parakeet":
                 if PARAKEET_MLX_AVAILABLE:
@@ -340,6 +370,41 @@ class TranscriptionHandler:
             self._log_status(f"Unknown model type for {model_id}, defaulting to whisper", "orange")
             return "whisper"
 
+    def _get_local_model_dir(self, model_id: str):
+        """Return bundled model path if it exists and appears complete."""
+        if not model_id:
+            return None
+        normalized_path = os.path.join(
+            config.MODELS_ROOT,
+            model_id.replace("/", os.sep),
+        )
+        config_file = os.path.join(normalized_path, "config.json")
+        if not (os.path.isdir(normalized_path) and os.path.exists(config_file)):
+            return None
+
+        try:
+            with open(config_file, "r", encoding="utf-8") as cfg_fh:
+                cfg_data = json.load(cfg_fh) if config_file else {}
+        except Exception:
+            cfg_data = {}
+
+        # Whisper repos include detailed "dims" metadata; bail out if missing to avoid partial bundles.
+        if not isinstance(cfg_data, dict) or "dims" not in cfg_data:
+            return None
+
+        tokenizer_file = os.path.join(normalized_path, "tokenizer.json")
+        if not os.path.exists(tokenizer_file):
+            return None
+
+        return normalized_path
+
+    @staticmethod
+    def _ensure_hf_offline_env():
+        """Prevent huggingface_hub from making network calls once models are local."""
+        current = os.getenv("HF_HUB_OFFLINE", "").lower()
+        if current not in {"1", "true", "yes"}:
+            os.environ["HF_HUB_OFFLINE"] = "1"
+
     def _detect_whisper_backend(self, model_id: str) -> str:
         """Return 'mlx' for MLX-native repos, otherwise 'transformers'."""
         if not model_id:
@@ -367,9 +432,14 @@ class TranscriptionHandler:
         if self.on_status_update:
             self.on_status_update(message, color)
 
-    def _prepare_local_model_copy(self, hf_repo_id: str) -> str:
+    def _prepare_local_model_copy(self, hf_repo_id: str, *, local_files_only: bool = False) -> str:
         """Ensure a local model copy exists under models/, migrating cache if needed."""
         self._log_status(f"Preparing model locally: {hf_repo_id}", "blue")
+        bundled_path = self._get_local_model_dir(hf_repo_id)
+        if bundled_path:
+            self._log_status(f"Found bundled model at: {bundled_path}", "grey")
+            self._ensure_hf_offline_env()
+            return bundled_path
         # Target nested directory inside models/, e.g., models/mlx-community/whisper-large-v3-turbo
         target_dir = os.path.join(config.MODELS_ROOT, hf_repo_id.replace("/", os.sep))
         target_parent = os.path.dirname(target_dir)
@@ -399,12 +469,35 @@ class TranscriptionHandler:
                     local_model_path = target_dir
                 else:
                     # 3) Download directly into models/
-                    self._log_status(f"Downloading model into: {target_dir}", "blue")
-                    local_model_path = snapshot_download(
-                        repo_id=hf_repo_id,
-                        local_dir=target_dir,
-                        local_dir_use_symlinks=False,
-                    )
+                    if local_files_only or os.getenv("HF_HUB_OFFLINE", "").lower() in {"1", "true", "yes"}:
+                        self._log_status(
+                            "Download disabled - attempting to use existing local Hugging Face cache",
+                            "orange",
+                        )
+                        try:
+                            local_model_path = snapshot_download(
+                                repo_id=hf_repo_id,
+                                local_dir=target_dir,
+                                local_dir_use_symlinks=False,
+                                local_files_only=True,
+                            )
+                        except LocalEntryNotFoundError as inner_exc:
+                            raise RuntimeError(
+                                f"Model '{hf_repo_id}' not found in local Hugging Face cache. "
+                                "Please download it on a machine with internet access or "
+                                f"place the files under '{target_dir}'."
+                            ) from inner_exc
+                    else:
+                        try:
+                            local_model_path = snapshot_download(
+                                repo_id=hf_repo_id,
+                                local_dir=target_dir,
+                                local_dir_use_symlinks=False,
+                            )
+                        except LocalEntryNotFoundError as inner_exc:
+                            raise RuntimeError(
+                                f"Failed to download model '{hf_repo_id}'."
+                            ) from inner_exc
                     # snapshot_download may return the same local_dir; ensure directory exists
                     if not os.path.isdir(local_model_path):
                         os.makedirs(local_model_path, exist_ok=True)
@@ -565,6 +658,7 @@ class TranscriptionHandler:
                         model_path_or_repo = self.local_model_path_prepared or self.selected_asr_model
                         # Do not fallback to Transformers for MLX repos to avoid preprocessor_config.json requirement
                         fallback_attempted = False
+                        os.environ.setdefault("HF_HUB_HTTP_TIMEOUT", "5")
                         while True:
                             try:
                                 if not model_path_or_repo:
@@ -586,7 +680,27 @@ class TranscriptionHandler:
                                 raw_text = result.get("text", "").strip()
                                 break
                             except Exception as whisper_error:
-                                # Surface the mlx_whisper error directly and stop (no Transformers fallback for MLX repos)
+                                if not fallback_attempted:
+                                    fallback_attempted = True
+                                    self._log_status(
+                                        "MLX Whisper reported an error – retrying with local-only model files",
+                                        "orange",
+                                    )
+                                    try:
+                                        offline_path = self._prepare_local_model_copy(
+                                            self.selected_asr_model,
+                                            local_files_only=True,
+                                        )
+                                    except Exception as offline_error:
+                                        self._log_status(
+                                            f"Local fallback failed for '{self.selected_asr_model}': {offline_error}",
+                                            "red",
+                                        )
+                                        raise
+                                    else:
+                                        model_path_or_repo = offline_path
+                                        self._ensure_hf_offline_env()
+                                        continue
                                 self._log_status(
                                     f"MLX Whisper error for '{self.selected_asr_model}': {whisper_error}",
                                     "red",

@@ -38,6 +38,36 @@ function initializeIpcHandlers() {
     }
   });
 
+  ipcMain.handle('proof-paste', async (_event, payload) => {
+    try {
+      if (!payload || typeof payload.text !== 'string' || payload.text.trim().length === 0) {
+        console.warn('[IPC] proof-paste: Missing text payload.');
+        return { ok: false, error: 'No text provided.' };
+      }
+
+      const pythonShell = getPythonShell();
+      if (!pythonShell || typeof pythonShell.send !== 'function') {
+        console.error('[IPC] proof-paste: Python backend not available.');
+        return { ok: false, error: 'Backend not ready.' };
+      }
+
+      const message = {
+        text: payload.text
+      };
+      if (payload.prompt && typeof payload.prompt === 'string' && payload.prompt.trim().length > 0) {
+        message.prompt = payload.prompt;
+      }
+
+      const serialized = JSON.stringify(message);
+      pythonShell.send(`PASTE_PROOF:${serialized}`);
+      console.log('[IPC] proof-paste command forwarded to Python backend.');
+      return { ok: true };
+    } catch (error) {
+      console.error('[IPC] proof-paste: Failed to forward command.', error);
+      return { ok: false, error: error.message || 'Unexpected error.' };
+    }
+  });
+
   // Add other ipcMain.on handlers here if needed in the future
 
   // Handle settings saving

@@ -198,3 +198,7 @@ export function handleUiUpdate(data) {
   }
   updateMainWindowHeight();
 }
+
+export function recomputeWindowHeight() {
+  updateMainWindowHeight();
+}

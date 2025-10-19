@@ -12,6 +12,17 @@ let actualAvailableLLMs = []; // To store models received from Python
 // currentProofingActiveState and isFirstResponseChunkInStream removed as UI updates for expansion areas
 // are now handled by PROOF_STREAM messages via renderer_ipc.js
 
+function resolvePythonExecutable() {
+  if (process.env.PYTHON_PATH && process.env.PYTHON_PATH.trim()) {
+    return process.env.PYTHON_PATH.trim();
+  }
+  const venvPython = path.join(__dirname, '..', '.venv_py311', 'bin', 'python3');
+  if (fs.existsSync(venvPython)) {
+    return venvPython;
+  }
+  return 'python3';
+}
+
 /**
  * Get the path to the Python backend executable
  * In development: use Python directly
@@ -115,7 +126,7 @@ function startPythonShell(onMessage, onError, onClose) {
     // Use PythonShell for development
     const options = {
       mode: 'text',
-      pythonPath: process.env.PYTHON_PATH || 'python3', // Use environment variable or default to python3
+      pythonPath: resolvePythonExecutable(),
       pythonOptions: ['-u'],
       scriptPath: backendConfig.scriptPath
     };
@@ -164,7 +175,7 @@ function getPythonShell() {
 function startPythonBackend(mainWindow) {
   const options = {
     mode: 'text',
-    pythonPath: process.env.PYTHON_PATH || 'python3', // Use environment variable or default to python3
+    pythonPath: resolvePythonExecutable(),
     pythonOptions: ['-u'], // Unbuffered output
     scriptPath: path.join(__dirname, '..') // Path to main.py (go up from electron/ to root)
   };

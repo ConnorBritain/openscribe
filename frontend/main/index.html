@@ -33,9 +33,19 @@
             </div>
             <div class="buttons">
                  <button id="always-on-top-button" title="Toggle Always on Top">📌</button> <!-- Pin icon -->
+                 <button id="paste-proof-button" type="button" title="Paste text for proof formatting">Paste → Proof</button>
                 <button id="stop-button">Stop <kbd>Space</kbd></button>
                 <button id="cancel-button">Cancel <kbd>Esc</kbd></button>
             </div>
+        </div>
+        <div id="paste-proof-area" class="paste-proof-area" style="display: none;">
+            <label for="paste-proof-input" class="sr-only">Text to proof</label>
+            <textarea id="paste-proof-input" placeholder="Paste text here to proof…" spellcheck="false"></textarea>
+            <div class="paste-proof-actions">
+                <button id="paste-proof-submit" type="button">Start Proof</button>
+                <button id="paste-proof-cancel" type="button">Cancel</button>
+            </div>
+            <div id="paste-proof-feedback" class="paste-proof-feedback" role="status" aria-live="polite"></div>
         </div>
         <div id="thinking-area" class="expandable-area" style="display: none;">
             <div id="thinking-header">

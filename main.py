@@ -5,6 +5,7 @@ import threading
 import json  # For potential structured communication over stdin/stdout
 import time
 import subprocess
+from typing import Optional
 
 # Make Quartz imports conditional for CI compatibility
 try:
@@ -646,27 +647,36 @@ class Application:
             target=self.llm_handler.load_model, args=(model_key,), daemon=True
         ).start()
 
-    def _trigger_proofread(self, text: str, prompt: str):
+    def _trigger_proofread(self, text: str, prompt: Optional[str]):
         """Handles proofread command from Electron."""
         log_text("COMMAND", "Proofread command received.")
-        if not text:
+        cleaned_text = text.strip() if isinstance(text, str) else ""
+        if not cleaned_text:
             self._handle_status_update("Proofread Error: No text provided.", "red")
             return
-        if self.llm_handler._model is None:
-            self._handle_status_update("Proofread Error: LLM is not loaded.", "red")
-            return
-        if self.audio_handler.get_listening_state() != "activation":
+
+        listening_state = self.audio_handler.get_listening_state()
+        if listening_state != "activation":
             self._handle_status_update(
                 "Proofread Error: Cannot proofread while dictating or processing.",
                 "orange",
             )
             return
 
-        self._handle_status_update("Processing with LLM (proofread mode)...", "orange")
-        self._current_processing_mode = "proofread"  # Set mode for LLM callback
-        self._current_prompt = prompt  # Store prompt for LLM handler
-        # Defensive: ensure selected model resolves before calling
-        self.llm_handler.process_text(text, "proofread", prompt)
+        if self.llm_handler._model is None:
+            self._handle_status_update("Loading proofing model…", "orange")
+
+        self._current_processing_mode = "proofread"
+        self._current_prompt = prompt
+        self._current_transcript = cleaned_text
+        self._last_raw_transcription = cleaned_text
+
+        preview = cleaned_text.replace("\n", "\\n").replace("\r", "\\r")
+        print(f"DICTATION_PREVIEW:{preview}", flush=True)
+
+        self._handle_status_update("Starting proofreading with LLM...", "orange")
+        self._update_app_state()
+        self.llm_handler.process_text(cleaned_text, "proofread", prompt)
 
     def _trigger_letter(self, text: str, prompt: str):
         """Handles letter command from Electron."""
@@ -1038,6 +1048,19 @@ if __name__ == "__main__":
                 log_text(
                     "STARTUP_TRACE", f"Sent MODELS_LIST list."
                 )  # Corrected TRACE message
+
+            elif command_line.startswith("PASTE_PROOF:"):
+                payload_str = command_line[len("PASTE_PROOF:") :]
+                try:
+                    payload = json.loads(payload_str)
+                    text = payload.get("text", "")
+                    prompt = payload.get("prompt")
+                    if not isinstance(prompt, str) or not prompt.strip():
+                        prompt = None
+                    app._trigger_proofread(text, prompt)
+                except json.JSONDecodeError as e:
+                    log_text("COMMAND_ERROR", f"Invalid PASTE_PROOF payload: {e}")
+                    app._handle_status_update("Proofread Error: Invalid text payload.", "red")
 
             elif command_line == "STOP_DICTATION":
                 app._trigger_stop_dictation()

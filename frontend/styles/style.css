@@ -418,6 +418,100 @@ line-height: 1.6;
     color: #ddd;
 }
 
+#paste-proof-button {
+    font-weight: 500;
+    letter-spacing: 0.2px;
+}
+
+#paste-proof-button.active {
+    background-color: #565656;
+    border-color: #676767;
+}
+
+#paste-proof-button:disabled {
+    opacity: 0.5;
+    cursor: progress;
+}
+
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    border: 0;
+}
+
+.paste-proof-area {
+    background-color: #262626;
+    border: 1px solid #3a3a3a;
+    border-radius: 6px;
+    margin: 0 15px 10px 15px;
+    padding: 10px;
+    display: none; /* Shown via JS */
+    -webkit-app-region: no-drag;
+}
+
+.paste-proof-area textarea {
+    width: 100%;
+    min-height: 90px;
+    background-color: #1f1f1f;
+    border: 1px solid #3f3f3f;
+    border-radius: 4px;
+    color: #e4e4e4;
+    font-size: 13px;
+    line-height: 1.4;
+    padding: 8px;
+    resize: vertical;
+}
+
+.paste-proof-area textarea:focus {
+    outline: 2px solid #3a7afe;
+    outline-offset: 2px;
+}
+
+.paste-proof-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 8px;
+}
+
+.paste-proof-actions button {
+    background-color: #3a3a3a;
+    color: #eaeaea;
+    border: 1px solid #4a4a4a;
+    border-radius: 4px;
+    padding: 4px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.paste-proof-actions button:hover {
+    background-color: #4a4a4a;
+}
+
+.paste-proof-feedback {
+    display: none;
+    font-size: 12px;
+    margin-top: 8px;
+}
+
+.paste-proof-feedback.show {
+    display: block;
+}
+
+.paste-proof-feedback.error {
+    color: #ff6b6b;
+}
+
+.paste-proof-feedback.success {
+    color: #6dd47e;
+}
+
 /* Specific style for Always on Top button */
 #always-on-top-button {
     padding: 4px 6px; /* Make it smaller */
