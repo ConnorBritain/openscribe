@@ -917,6 +917,33 @@ if __name__ == "__main__":
                     continue
                 request_id = parts[1]
                 repo_id = parts[2]
+                if repo_id.lower().startswith("apple:"):
+                    # Verify helper app exists (dev or bundled).
+                    helper_candidates = [
+                        os.path.abspath(config.resolve_resource_path("AppleSpeechHelper.app")),
+                        os.path.abspath(os.path.join(os.path.dirname(__file__), "tools", "apple_speech_helper", "dist", "AppleSpeechHelper.app")),
+                    ]
+                    helper_path = next((p for p in helper_candidates if os.path.isdir(p) and p.lower().endswith(".app")), None)
+                    if not helper_path:
+                        error_payload = {
+                            "success": False,
+                            "modelId": repo_id,
+                            "error": "AppleSpeechHelper.app not found. Build it with: bash tools/apple_speech_helper/build.sh"
+                        }
+                        print(f"MODEL_ERROR:{request_id}:{json.dumps(error_payload)}", flush=True)
+                        sys.stdout.flush()
+                        log_text("COMMAND_ERROR", f"Apple model selected but helper missing: {repo_id}")
+                        continue
+                    response = {
+                        "success": True,
+                        "modelId": repo_id,
+                        "localPath": helper_path,
+                        "message": "Apple Speech selected (helper found; no model download required)."
+                    }
+                    print(f"MODEL_READY:{request_id}:{json.dumps(response)}", flush=True)
+                    sys.stdout.flush()
+                    log_text("COMMAND", f"No-op ensure for Apple model: {repo_id}")
+                    continue
                 try:
                     local_path = app.transcription_handler.ensure_model_assets(repo_id)
                     response = {

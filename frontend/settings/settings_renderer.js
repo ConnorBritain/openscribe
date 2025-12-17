@@ -16,7 +16,8 @@ const ASR_MODELS = [
     { id: 'mlx-community/whisper-large-v3-turbo', name: 'Whisper (large-v3-turbo) – Recommended' },
     { id: 'mlx-community/parakeet-tdt-0.6b-v2', name: 'Parakeet-TDT-0.6B-v2 – Requires parakeet-mlx' },
     { id: 'mlx-community/parakeet-tdt-0.6b-v3', name: 'Parakeet-TDT-0.6B-v3 – Latest MLX build' },
-    { id: 'mlx-community/Voxtral-Mini-3B-2507-bf16', name: 'Voxtral Mini 3B (bf16) – MLX Audio' }
+    { id: 'mlx-community/Voxtral-Mini-3B-2507-bf16', name: 'Voxtral Mini 3B (bf16) – MLX Audio' },
+    { id: 'apple:speech:ondevice', name: 'Apple Speech (on-device, macOS) – No model download' }
 ];
 
 // ASR Model Elements

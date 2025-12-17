@@ -140,6 +140,10 @@ except ImportError:
     pyaudio = MockPyAudio()
 
 import json
+import platform
+import subprocess
+import tempfile
+from pathlib import Path
 
 try:
     from huggingface_hub import snapshot_download
@@ -225,6 +229,8 @@ class TranscriptionHandler:
         if self.model_type == "whisper":
             self._whisper_backend = self._detect_whisper_backend(self.selected_asr_model)
             self._log_status(f"Selected whisper backend: {self._whisper_backend}", "grey")
+        if self.model_type == "apple":
+            self._log_status("Apple Speech selected (on-device, macOS). No model assets will be loaded.", "grey")
         if self.model_type == "voxtral" and not MLX_AUDIO_AVAILABLE:
             self._log_status(
                 "Voxtral model selected but mlx-audio is not installed. Install mlx-audio to enable Voxtral transcription.",
@@ -239,7 +245,10 @@ class TranscriptionHandler:
             self.local_model_path_prepared = "./mock_model_path"
  
         # Prefer bundled/local copies of models to avoid network calls when firewalled
-        if not getattr(self, "local_model_path_prepared", None) or self.local_model_path_prepared == "./mock_model_path":
+        if self.model_type != "apple" and (
+            not getattr(self, "local_model_path_prepared", None)
+            or self.local_model_path_prepared == "./mock_model_path"
+        ):
             bundled_path = self._get_local_model_dir(self.selected_asr_model)
             if bundled_path:
                 self.local_model_path_prepared = bundled_path
@@ -262,7 +271,7 @@ class TranscriptionHandler:
                     )
 
         # Load Parakeet model if needed (skip in light mode)
-        if not self._light_mode:
+        if not self._light_mode and self.model_type != "apple":
             if self.model_type == "parakeet" and PARAKEET_MLX_AVAILABLE:
                 try:
                     load_target = self.local_model_path_prepared or self.selected_asr_model
@@ -344,6 +353,10 @@ class TranscriptionHandler:
                 "Voxtral model selected but mlx-audio is not installed. Install mlx-audio to enable Voxtral transcription.",
                 "red",
             )
+
+        if self.model_type == "apple":
+            # Nothing to load; helper handles recognition and permissions.
+            return
         
         # Respect light mode - avoid heavy loads and downloads
         if getattr(self, "_light_mode", False):
@@ -421,6 +434,8 @@ class TranscriptionHandler:
             "whisper", "parakeet", or "voxtral"
         """
         model_id_lower = model_id.lower()
+        if model_id_lower.startswith("apple:"):
+            return "apple"
         if "voxtral" in model_id_lower:
             return "voxtral"
         if "parakeet" in model_id_lower:
@@ -586,6 +601,10 @@ class TranscriptionHandler:
         target_model = model_id or self.selected_asr_model
         if not target_model:
             raise ValueError("No model id provided to ensure_model_assets.")
+
+        if self._detect_model_type(target_model) == "apple":
+            self._log_status("Apple Speech selected; no model assets to prepare.", "grey")
+            return None
 
         self._log_status(f"Ensuring model assets for: {target_model}", "grey")
 
@@ -807,7 +826,27 @@ class TranscriptionHandler:
             # 3. Perform transcription based on model type
             start_time = time.time()
             
-            if self.model_type == "voxtral":
+            if self.model_type == "apple":
+                self._log_status("Using Apple Speech (on-device) for transcription", "blue")
+                try:
+                    raw_text = self._transcribe_with_apple_speech(filename)
+                except Exception as apple_error:
+                    self._log_status(
+                        f"Apple Speech failed ({apple_error}). Falling back to Whisper…",
+                        "orange",
+                    )
+                    if not MLX_WHISPER_AVAILABLE:
+                        raise
+                    result = mlx_whisper.transcribe(
+                        filename,
+                        language="en",
+                        fp16=False,
+                        prompt=prompt,
+                        path_or_hf_repo=config.DEFAULT_ASR_MODEL,
+                    )
+                    raw_text = (result.get("text", "") or "").strip()
+
+            elif self.model_type == "voxtral":
                 self._log_status(f"Using Voxtral (mlx-audio) for transcription with model: {self.selected_asr_model}", "blue")
                 if not MLX_AUDIO_AVAILABLE:
                     error_msg = "Voxtral transcription failed - mlx-audio library not installed. Please run: pip install mlx-audio"
@@ -962,6 +1001,120 @@ class TranscriptionHandler:
             if self.on_transcription_complete:
                 # The callback is handled by main.py which uses a queue, so it's safe.
                 self.on_transcription_complete(raw_text, transcription_time)
+
+    def _resolve_apple_speech_helper_app(self) -> str | None:
+        override = os.getenv("CT_APPLE_SPEECH_HELPER", "").strip()
+        if override:
+            return os.path.abspath(os.path.expanduser(override))
+
+        # Bundled: extraResources should place AppleSpeechHelper.app alongside the backend in Resources/.
+        bundled = config.resolve_resource_path("AppleSpeechHelper.app")
+        bundled_abs = os.path.abspath(bundled)
+        if os.path.isdir(bundled_abs) and bundled_abs.lower().endswith(".app"):
+            return bundled_abs
+
+        # Dev: locate relative to repo root (src/ -> repo/)
+        repo_root = Path(__file__).resolve().parents[1]
+        dev_app = repo_root / "tools" / "apple_speech_helper" / "dist" / "AppleSpeechHelper.app"
+        if dev_app.is_dir():
+            return str(dev_app)
+
+        return None
+
+    def _transcribe_with_apple_speech(self, audio_path: str) -> str:
+        if platform.system().lower() != "darwin":
+            raise RuntimeError("Apple Speech is only available on macOS.")
+
+        helper_app = self._resolve_apple_speech_helper_app()
+        if not helper_app:
+            raise RuntimeError(
+                "AppleSpeechHelper.app not found. Build it with: bash tools/apple_speech_helper/build.sh"
+            )
+
+        input_abs = os.path.abspath(audio_path)
+        if not os.path.isfile(input_abs):
+            raise RuntimeError(f"Audio file not found: {input_abs}")
+
+        debug_keep = os.getenv("CT_APPLE_SPEECH_DEBUG_KEEP", "0") == "1"
+        if debug_keep:
+            temp_dir = tempfile.mkdtemp(prefix="apple_speech_debug_", dir="/tmp")
+            temp_ctx = None
+        else:
+            temp_ctx = tempfile.TemporaryDirectory(prefix="apple_speech_")
+            temp_dir = temp_ctx.name
+
+        try:
+            out_json = os.path.join(temp_dir, "out.json")
+            done_json = os.path.join(temp_dir, "done.json")
+
+            cmd = [
+                "open",
+                "-n",
+                helper_app,
+                "--args",
+                "--input-file",
+                input_abs,
+                "--output-json",
+                out_json,
+                "--done-file",
+                done_json,
+                "--locale",
+                "en-US",
+                "--chunk-seconds",
+                os.getenv("CT_APPLE_SPEECH_CHUNK_SECONDS", "20"),
+                "--overlap-seconds",
+                os.getenv("CT_APPLE_SPEECH_OVERLAP_SECONDS", "1.0"),
+                "--timeout-seconds",
+                os.getenv("CT_APPLE_SPEECH_TIMEOUT_SECONDS", "60"),
+            ]
+
+            # Launch via LaunchServices so macOS can show permissions prompts.
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+
+            deadline = time.time() + float(os.getenv("CT_APPLE_SPEECH_OVERALL_TIMEOUT_SECONDS", "240"))
+            while time.time() < deadline:
+                if os.path.exists(done_json):
+                    break
+                time.sleep(0.05)
+
+            if not os.path.exists(done_json):
+                raise RuntimeError("Apple Speech helper did not finish (timeout).")
+
+            try:
+                with open(done_json, "r", encoding="utf-8") as f:
+                    done = json.load(f)
+            except Exception as e:
+                raise RuntimeError(f"Apple Speech helper returned unreadable done file: {e}") from e
+
+            exit_code = int(done.get("exit_code", 1))
+            if exit_code != 0:
+                err = done.get("error") or {}
+                code = err.get("code") or "ERROR"
+                msg = err.get("message") or "Apple Speech helper failed."
+                raise RuntimeError(f"Apple Speech error ({code}): {msg}")
+
+            # Helper should write output before done, but guard against filesystem timing.
+            out_deadline = time.time() + 5.0
+            while time.time() < out_deadline:
+                if os.path.exists(out_json) and os.path.getsize(out_json) > 0:
+                    break
+                time.sleep(0.05)
+
+            try:
+                with open(out_json, "r", encoding="utf-8") as f:
+                    out = json.load(f)
+            except Exception as e:
+                raise RuntimeError(f"Apple Speech helper returned unreadable output: {e}") from e
+
+            if not out.get("success", False):
+                code = out.get("code") or "ERROR"
+                msg = out.get("message") or "Apple Speech helper failed."
+                raise RuntimeError(f"Apple Speech error ({code}): {msg}")
+
+            return (out.get("text") or "").strip()
+        finally:
+            if temp_ctx is not None:
+                temp_ctx.cleanup()
 
     def _transcribe_with_transformers_whisper(self, audio_path: str, model_id: str, prompt: str) -> str:
         if not (TRANSFORMERS_AVAILABLE and TORCH_AVAILABLE):
