@@ -183,7 +183,7 @@ function startPythonBackend(mainWindow) {
 
   pythonShell.on('message', function (message) {
     // Reduce console spam: log only a whitelist of prefixes
-    const importantPrefixes = ['PYTHON_BACKEND_READY', 'GET_CONFIG', 'MODELS_LIST:', 'MODEL_SELECTED:', 'MODELS:', 'DICTATION_PREVIEW:', 'FINAL_TRANSCRIPT:', 'TRANSCRIPTION:'];
+    const importantPrefixes = ['PYTHON_BACKEND_READY', 'GET_CONFIG', 'FINAL_TRANSCRIPT:', 'TRANSCRIPTION:'];
     const isImportant = importantPrefixes.some(pfx => message.startsWith(pfx));
     if (isImportant) {
       const noTruncate = message.startsWith('FINAL_TRANSCRIPT:') || message.startsWith('DICTATION_PREVIEW:') || message.startsWith('TRANSCRIPTION:');
@@ -201,11 +201,11 @@ function startPythonBackend(mainWindow) {
     if (trimmedMessage === 'GET_CONFIG') {
       console.log('[ElectronPython] Processing GET_CONFIG');
       const pythonConfig = {
-        wakeWords: store.get('wakeWords', { dictate: [], proofread: [], letter: [] }),
-        proofingPrompt: store.get('proofingPrompt'),
-        letterPrompt: store.get('letterPrompt'),
-        selectedProofingModel: store.get('selectedProofingModel'),
-        selectedLetterModel: store.get('selectedLetterModel'),
+        wakeWords: store.get('wakeWords', { dictate: [] }),
+        filterFillerWords: store.get('filterFillerWords', true),
+        fillerWords: store.get('fillerWords', []),
+        autoStopOnSilence: store.get('autoStopOnSilence', true),
+        wakeWordEnabled: store.get('wakeWordEnabled', true),
         selectedAsrModel: store.get('selectedAsrModel') // Ensure ASR model is also sent
       };
       if (pythonShell && pythonShell.stdin && !pythonShell.stdin.destroyed) {
@@ -266,6 +266,25 @@ function startPythonBackend(mainWindow) {
         const state = JSON.parse(stateJson);
         // const mainWin = mainWindow; // mainWindow is from the startPythonBackend closure
 
+        // Keep tray icon in sync with audio state
+        try {
+          const { setTrayIconByState } = require('./electron_tray');
+          let trayState = 'inactive';
+          // If wake words are disabled, show inactive even if activation state is present
+          if (state.wakeWordEnabled === false) {
+            trayState = 'inactive';
+          } else if (state.audioState === 'dictation') {
+            trayState = 'dictation';
+          } else if (state.audioState === 'processing') {
+            trayState = 'processing';
+          } else if (state.audioState === 'activation' || state.audioState === 'preparing') {
+            trayState = 'activation';
+          }
+          setTrayIconByState(trayState);
+        } catch (trayErr) {
+          console.error('[ElectronPython] Failed to update tray from STATE:', trayErr);
+        }
+
         if (mainWindow) {
           const shouldBeOnTop = state.isDictating || state.isProofingActive;
           if (mainWindow.isAlwaysOnTop() !== shouldBeOnTop) {
@@ -281,7 +300,8 @@ function startPythonBackend(mainWindow) {
                 isDictating: state.isDictating,
                 audioState: state.audioState,
                 programActive: state.programActive,
-                currentMode: state.currentMode
+                currentMode: state.currentMode,
+                wakeWordEnabled: state.wakeWordEnabled
               };
               mainWindow.webContents.send('ui-update', dictationUpdateData);
             } catch (error) {
@@ -347,9 +367,17 @@ function startPythonBackend(mainWindow) {
         } else if (color === 'orange' && (messageText.includes('Loading') || messageText.includes('Processing'))) {
           trayState = 'processing';
           shouldUpdateTray = true;
-        } else if ((color === 'grey' || color === 'gray') && (messageText.includes('Microphone is not listening') || messageText.includes('Shutdown complete'))) {
-          trayState = 'inactive';
-          shouldUpdateTray = true;
+        } else if ((color === 'grey' || color === 'gray')) {
+          // Only force inactive for explicit microphone-off messages; ignore benign grey status updates
+          const lowerMsg = messageText.toLowerCase();
+          const isInactiveMsg = lowerMsg.includes('microphone is not listening') ||
+            lowerMsg.includes('shutdown complete') ||
+            lowerMsg.includes('program inactive') ||
+            lowerMsg.includes('inactive');
+          if (isInactiveMsg) {
+            trayState = 'inactive';
+            shouldUpdateTray = true;
+          }
         }
 
         if (shouldUpdateTray) {

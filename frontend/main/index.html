@@ -32,32 +32,20 @@
                 <span id="processing-indicator" class="indicator-text" style="display: none;">Loading...</span> <!-- Hidden by default -->
             </div>
             <div class="buttons">
-                 <button id="always-on-top-button" title="Toggle Always on Top">📌</button> <!-- Pin icon -->
-                 <button id="paste-proof-button" type="button" title="Paste text for proof formatting">Paste → Proof</button>
+                <button id="wakeword-toggle" aria-pressed="true" title="Toggle wake word listening">Wake Word On</button>
+                <button id="always-on-top-button" title="Toggle Always on Top">📌</button> <!-- Pin icon -->
                 <button id="stop-button">Stop <kbd>Space</kbd></button>
                 <button id="cancel-button">Cancel <kbd>Esc</kbd></button>
             </div>
         </div>
-        <div id="paste-proof-area" class="paste-proof-area" style="display: none;">
-            <label for="paste-proof-input" class="sr-only">Text to proof</label>
-            <textarea id="paste-proof-input" placeholder="Paste text here to proof…" spellcheck="false"></textarea>
-            <div class="paste-proof-actions">
-                <button id="paste-proof-submit" type="button">Start Proof</button>
-                <button id="paste-proof-cancel" type="button">Cancel</button>
+        <div id="response-area" class="response-area">
+            <div class="transcript-header">
+                <span class="transcript-header__title">Live Transcript</span>
+                <span class="transcript-header__hint">Newest entries appear first.</span>
             </div>
-            <div id="paste-proof-feedback" class="paste-proof-feedback" role="status" aria-live="polite"></div>
-        </div>
-        <div id="thinking-area" class="expandable-area" style="display: none;">
-            <div id="thinking-header">
-                <span id="thinking-toggle-icon" class="toggle-icon">▼</span> <!-- Default to expanded -->
-                <span class="header-title-text">Thoughts</span>
+            <div id="transcript-stream" class="transcript-stream">
+                <div class="transcript-placeholder">Dictation results will appear here once you start speaking.</div>
             </div>
-            <div id="thinking-content">
-                <!-- Actual thinking text will go here -->
-            </div>
-        </div>
-        <div id="response-area" class="expandable-area" style="display: none;">
-            <!-- Content for LLM response will go here -->
         </div>
     </div>
 

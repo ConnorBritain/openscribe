@@ -8,13 +8,10 @@ import unittest
 WHITELIST_PREFIXES = [
     'PYTHON_BACKEND_READY',
     'GET_CONFIG',
-    'MODELS:',
-    'MODEL_SELECTED:',
     'STATE:',
     'STATUS:',
     'FINAL_TRANSCRIPT:',
-    'DICTATION_PREVIEW:',
-    'TRANSCRIPTION:'
+    'HOTKEYS:',
 ]
 
 
@@ -27,13 +24,10 @@ class TestStdoutNoiseContract(unittest.TestCase):
         valid_samples = [
             'PYTHON_BACKEND_READY',
             'GET_CONFIG',
-            'MODELS:{"proof":"id","letter":"id"}',
-            'MODEL_SELECTED:proof:some/model',
             'STATE:{"audioState":"activation"}',
             'STATUS:blue:Listening for activation words...',
             'FINAL_TRANSCRIPT:hello world',
-            'DICTATION_PREVIEW:line1\\nline2',
-            'TRANSCRIPTION:PROOFED:- item',
+            'HOTKEYS:Cmd+Shift+D => start_dictate',
         ]
         for msg in valid_samples:
             with self.subTest(msg=msg):
@@ -50,19 +44,6 @@ class TestStdoutNoiseContract(unittest.TestCase):
             with self.subTest(msg=msg):
                 self.assertFalse(any(msg.startswith(p) for p in WHITELIST_PREFIXES))
 
-    def test_dictation_preview_is_full_and_escaped(self):
-        # Simulate the same escaping we use before printing DICTATION_PREVIEW
-        raw = 'line1\nline2\rwith CR and newline\n'
-        escaped = raw.replace("\n", "\\n").replace("\r", "\\r")
-        preview_line = 'DICTATION_PREVIEW:' + escaped
-        self.assertTrue(preview_line.startswith('DICTATION_PREVIEW:'))
-        # Ensure escape sequences are present, not raw newlines
-        after_prefix = preview_line[len('DICTATION_PREVIEW:'):]
-        self.assertIn('\\n', after_prefix)
-        self.assertIn('\\r', after_prefix)
-
-
 if __name__ == '__main__':
     unittest.main()
-
 

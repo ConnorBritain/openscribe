@@ -256,6 +256,12 @@ whisper_env/
 temp_audio/
 cache/
 
+# App history (contains PHI / large files)
+data/history/
+
+# Local datasets (not source-controlled)
+clinic_data/
+
 # Vosk model files (included in repository for immediate functionality)
 # Note: Vosk model files are essential for wake word detection
 # They are ~68MB total and included for user convenience
@@ -272,6 +278,12 @@ logs/
 *.log
 transcript_log.txt*
 memory_logs.jsonl*
+
+# Apple Speech bench outputs (may contain sensitive transcript text)
+tools/apple_speech_bench/apple_speech_results*.jsonl*
+tools/apple_speech_bench/compare_*.md
+tools/apple_speech_bench/compare_*.csv
+tools/apple_speech_bench/tmp_*/
 
 # IDE
 .vscode/

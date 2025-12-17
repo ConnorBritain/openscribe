@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>OpenScribe — Professional Dictation Transcriber</title>
-  <meta name="description" content="OpenScribe is a professional-grade speech‑to‑text transcription app with AI-powered proofreading and custom vocabulary training." />
+  <meta name="description" content="OpenScribe is a professional-grade speech‑to‑text transcription app for instant notes with customizable vocabulary training." />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -101,7 +101,7 @@
     <section class="hero">
       <div>
         <span class="kicker">AI‑Powered Dictation</span>
-        <h1>Professional transcription with <span style="background:linear-gradient(135deg,var(--brand),var(--brand-2));-webkit-background-clip:text;background-clip:text;color:transparent">proofreading</span> & custom vocabulary.</h1>
+        <h1>Professional transcription with <span style="background:linear-gradient(135deg,var(--brand),var(--brand-2));-webkit-background-clip:text;background-clip:text;color:transparent">instant notes</span> & custom vocabulary.</h1>
         <p>OpenScribe converts your speech to clean, formatted text in real time. Built with a Python backend and an Electron front‑end, it runs locally for speed and privacy. Add specialized terms, trigger actions by hotkeys or wake‑words, and ship notes faster.</p>
         <div class="cta">
           <a class="btn primary" href="#install">Install</a>
@@ -118,8 +118,8 @@
             <p class="muted">Fast local recognition (Whisper/Parakeet).</p>
           </div>
           <div>
-            <strong>AI proofreading</strong>
-            <p class="muted">Auto‑clean up grammar, style & formatting.</p>
+            <strong>Clean note output</strong>
+            <p class="muted">Optional filler-word filtering and smart spacing for copy-ready notes.</p>
           </div>
           <div>
             <strong>Custom vocabulary</strong>
@@ -182,12 +182,9 @@ npm start</code></pre>
 <pre id="block-manual"><code># Create folders
 mkdir -p models vosk
 
-# Parakeet speech model (~1.5GB)
-# Place at: models/mlx-community/parakeet-tdt-0.6b-v2/
-
-# LLM for proofreading (choose one)
-# • models/mlx-community/Qwen3-14B-4bit-AWQ  (~8GB)
-# • models/mlx-community/Qwen3-8B-4bit       (~4GB)
+# Parakeet speech model (~1.5GB) - choose one
+# v3 (latest): models/mlx-community/parakeet-tdt-0.6b-v3/
+# v2 (stable): models/mlx-community/parakeet-tdt-0.6b-v2/
 
 # Wake‑word (Vosk, ~100MB)
 # Download from: https://alphacephei.com/vosk/models
@@ -203,7 +200,7 @@ mkdir -p models vosk
         <ul>
           <li><strong>OS:</strong> macOS (primary), Windows, or Linux</li>
           <li><strong>CPU:</strong> Modern 4‑core or better. Apple Silicon M1/M2+ or Intel/AMD ≥2.5&nbsp;GHz recommended.</li>
-          <li><strong>Memory (RAM):</strong> Minimum 8&nbsp;GB. <em>Recommended</em> 16&nbsp;GB for smooth proofreading models; 24–32&nbsp;GB if using larger 14B LLMs.</li>
+          <li><strong>Memory (RAM):</strong> Minimum 8&nbsp;GB. <em>Recommended</em> 16&nbsp;GB for fast local transcription.</li>
           <li><strong>Python:</strong> <span style="color: #ff6b6b; font-weight: 700;">3.11 or newer (required for MLX compatibility)</span></li>
           <li><strong>Node.js:</strong> 16 or newer</li>
           <li><strong>ffmpeg:</strong> Required for audio processing</li>
@@ -211,7 +208,7 @@ mkdir -p models vosk
           <li><strong>Internet:</strong> Required on first run for auto‑downloaded models</li>
           <li><strong>Microphone:</strong> Any input supported by your OS</li>
         </ul>
-        <p class="muted" style="margin-top:8px">Notes: the default Parakeet speech model is ~1.5&nbsp;GB and runs well on 8–16&nbsp;GB RAM. For optional proofreading LLMs, 8B‑class 4‑bit models are comfortable on 16&nbsp;GB; 14B‑class 4‑bit may require 24&nbsp;GB+.</p>
+        <p class="muted" style="margin-top:8px">Notes: the default Parakeet speech model is ~1.5&nbsp;GB and runs well on 8–16&nbsp;GB RAM. Larger ASR models will require additional memory.</p>
       </div>
       <div class="card">
         <h2 style="margin-top:0">🔧 Virtual Environment Setup</h2>
@@ -248,7 +245,7 @@ pip install -r requirements.txt</code></pre>
           <li><kbd>⌘⇧S</kbd> — Stop dictation</li>
           <li><kbd>⌘⇧P</kbd> — Proofread selection</li>
           <li>Say "<em>note</em>" / "<em>dictate</em>" — start dictation</li>
-          <li>Say "<em>proof</em>" — start proofreading</li>
+          <li>Say "<em>note</em>" — start dictation</li>
         </ul>
         <p class="muted" style="margin-top:8px">Customize hotkeys and wake‑words in <em>Settings → Shortcuts</em>.</p>
       </div>

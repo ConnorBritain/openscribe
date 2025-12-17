@@ -123,17 +123,11 @@ class MockLLMProcessor:
         return True
 
     def process_text(self, text: str, task_type: str = "dictate") -> str:
-        """Mock LLM text processing"""
+        """Mock text processing for dictation-style formatting"""
         if not self.is_loaded:
             raise RuntimeError("LLM model not loaded")
 
-        # Simulate processing with realistic medical formatting
-        if task_type == "dictate":
-            processed = self._format_medical_dictation(text)
-        elif task_type == "proofread":
-            processed = self._proofread_text(text)
-        else:
-            processed = text
+        processed = self._format_medical_dictation(text)
 
         self.processing_history.append(
             {
@@ -173,15 +167,6 @@ class MockLLMProcessor:
                 formatted_lines.append(f"- {line.strip()}")
 
         return "\n".join(formatted_lines)
-
-    def _proofread_text(self, text: str) -> str:
-        """Simulate text proofreading"""
-        # Simple proofreading simulation
-        corrected = text.replace(" cant ", " can't ")
-        corrected = corrected.replace(" wont ", " won't ")
-        corrected = corrected.replace(" dont ", " don't ")
-        return corrected
-
 
 class MockFrontendDisplay:
     """Mock frontend display for integration testing"""
@@ -408,23 +393,6 @@ class TestEndToEndDictation(unittest.TestCase):
         final_content = result["llm_result"]
         self.assertIn("diabetes", final_content)
         self.assertIn("hypertension", final_content)
-
-    def test_proofreading_workflow(self):
-        """Test proofreading workflow"""
-
-        self.workflow.initialize(self.vosk_model_path, self.llm_model_path)
-
-        text_with_errors = "Patient cant breathe well and dont have energy"
-        result = self.workflow.process_dictation(text_with_errors, "proofread")
-
-        self.assertTrue(result["success"])
-
-        # Verify proofreading corrections
-        corrected_text = result["llm_result"]
-        self.assertIn("can't", corrected_text)
-        self.assertIn("don't", corrected_text)
-        self.assertNotIn("cant", corrected_text)
-        self.assertNotIn("dont", corrected_text)
 
     def test_multiple_session_workflow(self):
         """Test multiple dictation sessions"""

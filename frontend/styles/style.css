@@ -3,13 +3,13 @@ body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     margin: 0;
     padding: 0;
-    background-color: transparent; /* For frameless window, app-container will set its own bg */
-    color: #e0e0e0; /* Default text color, can be overridden */
-    height: 100vh; /* Ensure body takes full viewport height */
+    background-color: #0c111a;
+    color: #e0e0e0;
+    height: 100vh;
     display: flex;
-    flex-direction: column; /* Stack children vertically, e.g., app-container */
-    align-items: stretch; /* Stretch children to fill width */
-    overflow: hidden; /* Prevent body scrollbars, app-container will manage its own */
+    flex-direction: column;
+    align-items: stretch;
+    overflow: hidden;
 }
 
 #proofing-stream-container {
@@ -200,120 +200,29 @@ margin-bottom: 4px;
 line-height: 1.6;
 }
 
-/* Styles for expandable areas in the main window */
-/* General styling for both thinking and response areas */
-.expandable-area {
-    width: calc(100% - 20px); /* Adjusted width for narrower container */
-    margin: 0px 10px;      /* Remove top/bottom margin, keep horizontal */
-    padding: 10px 15px;    /* Internal padding */
-    border-radius: 8px;    /* Rounded corners like the image */
-    background-color: rgba(44, 44, 46, 0.85); /* Dark background #2c2c2e with 85% opacity */
-    color: #e0e0e0;        /* Light text */
-    box-sizing: border-box;
-    border: 1px solid rgba(56, 56, 58, 0.85); /* Subtle border #383838 with 85% opacity */
-    overflow-y: auto; 
-    /* display: none; is handled by inline style + JS */
-}
-
-#thinking-area {
-    background: rgba(44, 44, 46, 0.95);
-    border: 1px solid #4a4a4a;
-    border-radius: 8px;
-    margin: 0px;
+/**
+ * Transcript area styling
+ */
+.response-area {
     display: flex;
     flex-direction: column;
+    margin: 0;
+    padding: 18px;
+    border-radius: 12px;
+    background-color: rgba(12, 18, 30, 0.92);
+    border: 1px solid rgba(68, 90, 130, 0.32);
+    color: #e0e0e0;
+    font-size: 13px;
+    line-height: 1.6;
+    white-space: normal;
+    word-break: break-word;
+    max-height: none;
     overflow: hidden;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    flex: 1 1 0;
+    box-sizing: border-box;
+    gap: 14px;
+    min-height: 0;
 }
-
-#thinking-header {
-    background: rgba(60, 60, 62, 0.95);
-    border-bottom: 1px solid #4a4a4a;
-    padding: 8px 12px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    user-select: none;
-    transition: background-color 0.2s ease;
-}
-
-#thinking-header:hover {
-    background: rgba(70, 70, 72, 0.95);
-}
-
-#thinking-toggle-icon {
-    color: #888;
-    margin-right: 8px;
-    font-size: 12px;
-    transition: transform 0.2s ease;
-}
-
-#thinking-header .header-title-text {
-    color: #e0e0e0;
-    font-weight: 600;
-    font-size: 14px;
-    letter-spacing: 0.02em;
-    font-style: normal; /* Override any italic from parent */
-}
-
-#thinking-summary {
-    color: #a0a0a0;
-    font-size: 13px;
-    font-style: italic;
-    margin-left: 10px;
-}
-
-#thinking-content {
-    padding: 10px 12px;
-    background: rgba(44, 44, 46, 0.95);
-    color: #d0d0d0;
-    font-size: 13px;
-    line-height: 1.4;
-    white-space: pre-wrap;
-    word-wrap: break-word;
-    max-height: 40vh; /* Limit to 40% of viewport height */
-    overflow-y: auto; /* Add scrolling when content exceeds max height */
-    transition: all 0.3s ease;
-    font-style: italic;
-}
-
-/* Collapsed state for the thinking area */
-#thinking-area.collapsed {
-    /* When collapsed, the main thinking area should not contribute extra space beyond its header */
-    margin-bottom: 0; /* Remove bottom margin when collapsed if it causes spacing issues */
-    /* It will effectively take the height of its header due to flex properties */
-}
-
-#thinking-area.collapsed #thinking-content {
-    max-height: 0;
-    padding: 0; /* Remove all padding when collapsed */
-    opacity: 0;
-    overflow: hidden; /* Hide content completely when collapsed */
-}
-
-#thinking-area.collapsed #thinking-toggle-icon {
-    transform: rotate(-90deg); /* Rotate icon when collapsed */
-}
-
-#response-area {
-    background: rgba(44, 44, 46, 0.95);
-    border: 1px solid #4a4a4a;
-    border-radius: 8px;
-    padding: 12px;
-    margin: 8px 0px 0px 0px;
-    color: #e0e0e0;
-    font-size: 14px;
-    line-height: 1.5;
-    white-space: pre-wrap;
-    word-wrap: break-word;
-    max-height: 40vh; /* Limit to 40% of viewport height */
-    overflow-y: auto; /* Add scrolling when content exceeds max height */
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-    min-height: auto; /* Allow natural height based on content */
-}
-
-/* General text styling within these areas if not overridden by more specific elements */
-/* (No general rule here for now to avoid unintended consequences) */
 
 /* Waveform Area */
 #waveform-area {
@@ -418,19 +327,14 @@ line-height: 1.6;
     color: #ddd;
 }
 
-#paste-proof-button {
-    font-weight: 500;
-    letter-spacing: 0.2px;
+#wakeword-toggle {
+    min-width: 110px;
 }
 
-#paste-proof-button.active {
-    background-color: #565656;
-    border-color: #676767;
-}
-
-#paste-proof-button:disabled {
-    opacity: 0.5;
-    cursor: progress;
+#wakeword-toggle.wakeword-off {
+    background-color: #383838;
+    color: #b0b0b0;
+    border-color: #666;
 }
 
 .sr-only {
@@ -442,74 +346,6 @@ line-height: 1.6;
     overflow: hidden;
     clip: rect(0, 0, 0, 0);
     border: 0;
-}
-
-.paste-proof-area {
-    background-color: #262626;
-    border: 1px solid #3a3a3a;
-    border-radius: 6px;
-    margin: 0 15px 10px 15px;
-    padding: 10px;
-    display: none; /* Shown via JS */
-    -webkit-app-region: no-drag;
-}
-
-.paste-proof-area textarea {
-    width: 100%;
-    min-height: 90px;
-    background-color: #1f1f1f;
-    border: 1px solid #3f3f3f;
-    border-radius: 4px;
-    color: #e4e4e4;
-    font-size: 13px;
-    line-height: 1.4;
-    padding: 8px;
-    resize: vertical;
-}
-
-.paste-proof-area textarea:focus {
-    outline: 2px solid #3a7afe;
-    outline-offset: 2px;
-}
-
-.paste-proof-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 8px;
-}
-
-.paste-proof-actions button {
-    background-color: #3a3a3a;
-    color: #eaeaea;
-    border: 1px solid #4a4a4a;
-    border-radius: 4px;
-    padding: 4px 12px;
-    font-size: 12px;
-    cursor: pointer;
-    transition: background-color 0.2s ease;
-}
-
-.paste-proof-actions button:hover {
-    background-color: #4a4a4a;
-}
-
-.paste-proof-feedback {
-    display: none;
-    font-size: 12px;
-    margin-top: 8px;
-}
-
-.paste-proof-feedback.show {
-    display: block;
-}
-
-.paste-proof-feedback.error {
-    color: #ff6b6b;
-}
-
-.paste-proof-feedback.success {
-    color: #6dd47e;
 }
 
 /* Specific style for Always on Top button */
@@ -640,12 +476,22 @@ line-height: 1.6;
 #app-container {
     display: flex;
     flex-direction: column;
-    height: 100%; /* Full height of body */
-    width: 100%;   /* Full width of body */
-    background-color: rgba(30, 30, 30, 0.85); /* Semi-transparent background */
-    padding: 5px;
+    height: 100%;
+    width: 100%;
+    padding: 10px 12px;
     box-sizing: border-box;
-    overflow: hidden; /* Prevent app container itself from scrolling */
+    gap: 12px;
+    min-height: 0;
+    background: #0c111a;
+}
+
+#app-container.is-transcript-collapsed {
+    gap: 6px;
+    padding-bottom: 8px;
+}
+
+#app-container.is-transcript-collapsed #response-area {
+    display: none !important;
 }
 
 #model-info-area {
@@ -664,13 +510,22 @@ line-height: 1.6;
 /* Ensure waveform and control bar don't shrink and have some spacing */
 #waveform-area {
     flex-shrink: 0;
-    margin-bottom: 5px; /* Space below waveform */
-    /* Existing styles for canvas size will dictate height */
+    padding: 8px 12px;
+    border-radius: 10px;
+    background: rgba(24, 32, 48, 0.82);
+    border: 1px solid rgba(60, 80, 116, 0.3);
 }
 
 #control-bar {
-    flex-shrink: 0; /* Already has styling, ensure it doesn't shrink */
-    margin-bottom: 8px; /* Space below control bar */
+    flex-shrink: 0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 18px;
+    background-color: rgba(25, 34, 50, 0.85);
+    border-radius: 10px;
+    border: 1px solid rgba(60, 80, 116, 0.3);
+    color: #dde6ff;
 }
 
 /* Augmenting #thinking-area styles */
@@ -741,18 +596,204 @@ line-height: 1.6;
 
 /* Augmenting #response-area styles */
 #response-area {
-    flex-grow: 1; /* Takes up remaining vertical space */
-    padding: 10px;
-    overflow-y: auto;
-    background-color: #222222; /* Slightly different from thinking area */
-    border: 1px solid #404040;
-    border-radius: 5px;
-    color: #e0e0e0;
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.transcript-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+}
+
+.transcript-header__title {
+    font-weight: 600;
     font-size: 13px;
-    line-height: 1.6;
-    min-height: 50px; /* Ensure it's visible */
-    max-height: 250px; /* Limit height, allow internal scroll if content exceeds this */
-    /* .expandable-area and display:none are handled by JS */
+    color: #f5f5f5;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.transcript-header__hint {
+    font-size: 11px;
+    color: #9a9aa0;
+}
+
+.transcript-stream {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    overflow-y: auto;
+    padding-right: 8px;
+    min-height: 0;
+}
+
+.transcript-stream::-webkit-scrollbar {
+    width: 6px;
+}
+
+.transcript-stream::-webkit-scrollbar-thumb {
+    background-color: rgba(140, 140, 145, 0.5);
+    border-radius: 3px;
+}
+
+.transcript-placeholder {
+    padding: 18px;
+    text-align: center;
+    font-size: 12px;
+    color: #8e8e95;
+    border: 1px dashed #3f3f45;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.03);
+}
+
+.transcript-entry {
+    background: rgba(34, 34, 36, 0.95);
+    border: 1px solid #3d3d42;
+    border-radius: 6px;
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    position: relative;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.transcript-entry__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+}
+
+.transcript-entry__status {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #a0a0a5;
+}
+
+.transcript-entry__status--recording {
+    color: #4dd37a;
+}
+
+.transcript-entry__status--processing {
+    color: #ffb347;
+}
+
+.transcript-entry__status--listening {
+    color: #4c8dff;
+}
+
+.transcript-entry__status--complete {
+    color: #dadada;
+}
+
+.transcript-entry__timestamp {
+    font-size: 11px;
+    color: #83838a;
+}
+
+.transcript-entry__text {
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.55;
+    font-size: 13px;
+    color: #f2f2f2;
+    cursor: text;
+}
+
+.transcript-entry__footer {
+    border-top: 1px solid #3a3a3f;
+    padding-top: 6px;
+    font-size: 11px;
+    color: #7a7a80;
+}
+
+.transcript-entry__toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: rgba(20, 20, 24, 0.85);
+    border: 1px solid #45454c;
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: 12px;
+    color: #d8d8de;
+}
+
+.transcript-entry__toolbar.is-hidden {
+    display: none;
+}
+
+.transcript-entry__selection-preview {
+    font-family: monospace;
+    font-size: 12px;
+    background: rgba(255, 255, 255, 0.08);
+    padding: 4px 6px;
+    border-radius: 4px;
+    color: #f2f2f7;
+}
+
+.transcript-entry__toolbar-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.transcript-entry__learn-input {
+    flex: 1 1 auto;
+    padding: 6px 10px;
+    border-radius: 4px;
+    border: 1px solid rgba(77, 211, 122, 0.45);
+    background: rgba(18, 24, 34, 0.95);
+    color: #f0fff7;
+    font-size: 12px;
+}
+
+.transcript-entry__learn-input::placeholder {
+    color: rgba(200, 248, 214, 0.6);
+}
+
+.transcript-entry__learn-button {
+    padding: 6px 12px;
+    font-size: 12px;
+    border-radius: 4px;
+    border: 1px solid #4dd37a;
+    background: rgba(77, 211, 122, 0.15);
+    color: #4dd37a;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.transcript-entry__learn-button:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.transcript-entry__learn-button:not(:disabled):hover {
+    background: rgba(77, 211, 122, 0.3);
+}
+
+.transcript-entry__toolbar-feedback {
+    font-size: 11px;
+    color: #8dd7aa;
+}
+
+.transcript-entry__toolbar-feedback.is-error {
+    color: #ff7d7d;
+}
+
+
+.is-hidden {
+    display: none !important;
 }
 
 #stats-footer {
@@ -856,23 +897,6 @@ line-height: 1.6;
 
 #thinking-area.collapsed #thinking-toggle-icon {
     transform: rotate(-90deg);
-}
-
-#response-area {
-    background: rgba(44, 44, 46, 0.95);
-    border: 1px solid #4a4a4a;
-    border-radius: 8px;
-    padding: 12px;
-    margin: 8px 0px 0px 0px;
-    color: #e0e0e0;
-    font-size: 14px;
-    line-height: 1.5;
-    white-space: pre-wrap;
-    word-wrap: break-word;
-    max-height: 40vh; /* Limit to 40% of viewport height */
-    overflow-y: auto; /* Add scrolling when content exceeds max height */
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-    min-height: auto; /* Allow natural height based on content */
 }
 
 /* Stats footer styling for proofing mode */

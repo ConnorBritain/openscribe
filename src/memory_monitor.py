@@ -109,58 +109,6 @@ class MemoryMonitor:
         except Exception as e:
             print(f"Error in log_operation: {e}")
 
-    def log_proofing_operation(
-        self,
-        operation: str,
-        model_name: str = None,
-        input_length: int = None,
-        output_length: int = None,
-        duration: float = None,
-        **extra,
-    ):
-        """
-        Log memory usage for proofing operations.
-
-        Args:
-            operation: Type of proofing operation (e.g., 'proof_start', 'proof_complete')
-            model_name: Name of the model being used
-            input_length: Length of input text in characters
-            output_length: Length of output text in characters
-            duration: Time taken for the operation in seconds
-            **extra: Additional key-value pairs to include in the log
-        """
-        mem_info = self._process.memory_info()
-        log_entry = {
-            "timestamp": datetime.now().isoformat(),
-            "operation": operation,
-            "rss_mb": round(mem_info.rss / (1024 * 1024), 2),
-            "vms_mb": round(mem_info.vms / (1024 * 1024), 2),
-            "percent": round(self._process.memory_percent(), 2),
-            "process": self._process.name(),
-            "threads": self._process.num_threads(),
-        }
-
-        # Add optional fields if provided
-        if model_name is not None:
-            log_entry["model"] = model_name
-        if input_length is not None:
-            log_entry["input_length"] = input_length
-        if output_length is not None:
-            log_entry["output_length"] = output_length
-        if duration is not None:
-            log_entry["duration_sec"] = round(duration, 2)
-
-        # Add any extra fields
-        if extra:
-            log_entry.update(extra)
-
-        # Removed excessive console spam: print(f"[PROOFING_MEM] {json.dumps(log_entry, indent=2)}")
-        if self.log_to_file:
-            try:
-                with open(self._log_file, "a") as f:
-                    f.write(json.dumps(log_entry) + "\n")
-            except Exception as e:
-                print(f"Error writing proofing log: {e}")
 
     def get_memory_stats(self, audio_handler=None) -> MemoryStats:
         """Get current memory statistics."""

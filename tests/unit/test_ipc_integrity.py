@@ -9,9 +9,7 @@ The newline bug that caused 50+ debugging iterations would have been caught by t
 """
 
 import unittest
-import json
-import re
-from typing import List, Tuple
+from typing import Tuple
 
 
 class IPCMessageHandler:
@@ -63,38 +61,19 @@ class IPCMessageHandler:
         color = content[:first_colon]
         remaining = content[first_colon + 1 :]
 
-        # For PROOF_STREAM messages, we need to handle the nested format
-        if remaining.startswith("PROOF_STREAM:"):
-            # PROOF_STREAM:thinking:content or PROOF_STREAM:chunk:content or PROOF_STREAM:end
-            proof_content = remaining[13:]  # Remove "PROOF_STREAM:"
+        # Regular status message format
+        second_colon = remaining.find(":")
+        if second_colon == -1:
+            # No payload, just message type
+            return color, remaining, ""
 
-            # Find the next colon for the stream type
-            stream_colon = proof_content.find(":")
-            if stream_colon == -1:
-                # No payload, just stream type (e.g., "end")
-                return color, remaining, ""
+        message_type = remaining[:second_colon]
+        payload = remaining[second_colon + 1 :]
 
-            stream_type = proof_content[:stream_colon]
-            payload = proof_content[stream_colon + 1 :]
+        # Unescape the payload
+        unescaped_payload = self.unescape_content(payload)
 
-            # Unescape the payload
-            unescaped_payload = self.unescape_content(payload)
-
-            return color, remaining, unescaped_payload
-        else:
-            # Regular status message format
-            second_colon = remaining.find(":")
-            if second_colon == -1:
-                # No payload, just message type
-                return color, remaining, ""
-
-            message_type = remaining[:second_colon]
-            payload = remaining[second_colon + 1 :]
-
-            # Unescape the payload
-            unescaped_payload = self.unescape_content(payload)
-
-            return color, message_type, unescaped_payload
+        return color, message_type, unescaped_payload
 
 
 class TestIPCIntegrity(unittest.TestCase):
@@ -131,7 +110,7 @@ class TestIPCIntegrity(unittest.TestCase):
 
                 # Test full IPC roundtrip
                 message = self.ipc.format_status_message(
-                    "PROOF_STREAM:chunk", chunk, "blue"
+                    "TRANSCRIPT_CHUNK", chunk, "blue"
                 )
                 color, msg_type, payload = self.ipc.parse_status_message(message)
 
@@ -163,7 +142,7 @@ class TestIPCIntegrity(unittest.TestCase):
             with self.subTest(test_case=repr(test_case)):
                 # Test IPC roundtrip
                 message = self.ipc.format_status_message(
-                    "PROOF_STREAM:chunk", test_case, "blue"
+                    "TRANSCRIPT_CHUNK", test_case, "blue"
                 )
                 color, msg_type, payload = self.ipc.parse_status_message(message)
 
@@ -178,17 +157,12 @@ class TestIPCIntegrity(unittest.TestCase):
     def test_ipc_message_format_validation(self):
         """Validate all IPC message formats are correctly parsed"""
         test_messages = [
-            (
-                "STATUS:blue:PROOF_STREAM:chunk:Hello world",
-                ("blue", "PROOF_STREAM:chunk:Hello world", "Hello world"),
-            ),
             ("STATUS:red:Error occurred", ("red", "Error occurred", "")),
             ("STATUS:green:Processing complete", ("green", "Processing complete", "")),
             (
-                "STATUS:blue:PROOF_STREAM:thinking:Processing...",
-                ("blue", "PROOF_STREAM:thinking:Processing...", "Processing..."),
+                "STATUS:blue:TRANSCRIPT_CHUNK:Processing...",
+                ("blue", "TRANSCRIPT_CHUNK", "Processing..."),
             ),
-            ("STATUS:black:PROOF_STREAM:end", ("black", "PROOF_STREAM:end", "")),
         ]
 
         for message, expected in test_messages:
@@ -202,8 +176,8 @@ class TestIPCIntegrity(unittest.TestCase):
                     f"Got: {result}",
                 )
 
-    def test_proof_stream_chunk_scenarios(self):
-        """Test specific PROOF_STREAM:chunk scenarios that caused the bug"""
+    def test_transcript_chunk_scenarios(self):
+        """Test transcript streaming scenarios that previously triggered newline bugs"""
         # These are the exact patterns that failed in the newline bug
         bug_scenarios = [
             "- A 50-year-old male presents with two issues.",
@@ -218,7 +192,7 @@ class TestIPCIntegrity(unittest.TestCase):
             with self.subTest(chunk=repr(chunk)):
                 # Test individual chunk transmission
                 message = self.ipc.format_status_message(
-                    "PROOF_STREAM:chunk", chunk, "blue"
+                    "TRANSCRIPT_CHUNK", chunk, "blue"
                 )
                 color, msg_type, payload = self.ipc.parse_status_message(message)
 
@@ -247,28 +221,6 @@ class TestIPCIntegrity(unittest.TestCase):
             "No newlines found in accumulated content - this indicates the bug!",
         )
 
-    def test_thinking_content_scenarios(self):
-        """Test thinking content with various formats"""
-        thinking_scenarios = [
-            "Processing the input text...",
-            "I need to check for:\n- Grammar errors\n- Spelling mistakes\n- Clarity issues",
-            "思考过程：检查文本中的错误",
-            "Multi-line thinking with\nvarious formatting\nand bullet points:\n- Item 1\n- Item 2",
-        ]
-
-        for thinking_content in thinking_scenarios:
-            with self.subTest(content=repr(thinking_content)):
-                message = self.ipc.format_status_message(
-                    "PROOF_STREAM:thinking", thinking_content, "blue"
-                )
-                color, msg_type, payload = self.ipc.parse_status_message(message)
-
-                self.assertEqual(
-                    payload,
-                    thinking_content,
-                    f"Thinking content transmission failed for: {repr(thinking_content)}",
-                )
-
     def test_invalid_message_formats(self):
         """Test that invalid message formats are properly rejected"""
         invalid_messages = [
@@ -276,7 +228,6 @@ class TestIPCIntegrity(unittest.TestCase):
             "STATUS:",  # Empty
             "STATUS:blue",  # No message type
             "",  # Empty string
-            "TRANSCRIPTION:PROOFED:Text",  # Different message type
         ]
 
         for invalid_msg in invalid_messages:
@@ -306,7 +257,7 @@ class TestIPCIntegrity(unittest.TestCase):
         start_time = time.time()
 
         message = self.ipc.format_status_message(
-            "PROOF_STREAM:chunk", large_content, "blue"
+            "TRANSCRIPT_CHUNK", large_content, "blue"
         )
         color, msg_type, payload = self.ipc.parse_status_message(message)
 

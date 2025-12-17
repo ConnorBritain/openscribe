@@ -1,6 +1,6 @@
 # Professional Dictation Transcriber
 
-A professional-grade speech-to-text transcription application with AI-powered proofreading and formatting capabilities. Built with Python, Electron, and modern AI models.
+A professional-grade speech-to-text transcription application focused on fast note capture and customizable vocabulary. Built with Python, Electron, and local MLX speech models.
 
 ## Features
 
@@ -61,8 +61,11 @@ A professional-grade speech-to-text transcription application with AI-powered pr
   ```
 
 - Download the following models:
-  - **Speech Recognition**: `mlx-community/parakeet-tdt-0.6b-v2` (~1.5GB)
-    - Place in `models/mlx-community/parakeet-tdt-0.6b-v2/`
+- **Speech Recognition** (choose one):
+    - `mlx-community/parakeet-tdt-0.6b-v3` (~1.6GB, latest build)
+      - Place in `models/mlx-community/parakeet-tdt-0.6b-v3/`
+    - `mlx-community/parakeet-tdt-0.6b-v2` (~1.5GB)
+      - Place in `models/mlx-community/parakeet-tdt-0.6b-v2/`
   - **Text Processing**: `mlx-community/Qwen3-14B-4bit-AWQ` (~8GB)
     - Place in `models/mlx-community/Qwen3-14B-4bit-AWQ/`
   - **Alternative**: `mlx-community/Qwen3-8B-4bit` (~4GB)
@@ -99,7 +102,7 @@ npm start
 ### Proofreading
 
 1. Select text in any application
-2. Press `Cmd+Shift+P` to proofread the selected text
+2. Dictate your note, or paste text directly if you have automatic filler-word cleanup enabled
 3. The corrected version will be copied to your clipboard
 
 ### Custom Vocabulary
@@ -116,8 +119,6 @@ npm start
 Default hotkeys (macOS):
 - `Cmd+Shift+A`: Toggle application active/inactive
 - `Cmd+Shift+D`: Start dictation
-- `Cmd+Shift+P`: Start proofreading
-- `Cmd+Shift+L`: Start letter mode
 - `Cmd+Shift+S`: Stop dictation
 - `Cmd+Shift+R`: Restart application
 - `Cmd+Shift+H`: Show hotkeys
@@ -127,8 +128,6 @@ Default hotkeys (macOS):
 
 You can also use voice commands:
 - Say "note" or "dictate" to start dictation
-- Say "proof" or "proofread" to start proofreading
-- Say "letter" to start letter mode
 
 ## Architecture
 

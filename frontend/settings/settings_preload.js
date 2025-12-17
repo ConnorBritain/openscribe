@@ -7,8 +7,7 @@ contextBridge.exposeInMainWorld('settingsAPI', {
   // Example function to request settings from main process
   loadSettings: () => ipcRenderer.invoke('load-settings'),
 
-  // Function to request available models from main process
-  getAvailableModels: () => ipcRenderer.invoke('get-available-models'),
+  ensureModel: (modelId) => ipcRenderer.invoke('ensure-model', modelId),
 
   // Function to call vocabulary API
   callVocabularyAPI: (command, data = {}) => ipcRenderer.invoke('vocabulary-api', command, data),

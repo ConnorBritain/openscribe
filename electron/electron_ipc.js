@@ -4,7 +4,8 @@
 const { ipcMain } = require('electron');
 const { setTrayIconByState } = require('./electron_tray');
 const { store } = require('./electron_app_init'); // For accessing electron-store
-const { getActualAvailableLLMs, getPythonShell } = require('./electron_python'); // To get models from Python
+const { getPythonShell } = require('./electron_python');
+const historyService = require('./history_service');
 
 function initializeIpcHandlers() {
   // Handle tray icon state updates from renderer
@@ -38,33 +39,31 @@ function initializeIpcHandlers() {
     }
   });
 
-  ipcMain.handle('proof-paste', async (_event, payload) => {
+  ipcMain.on('set-wake-word-enabled', (_event, enabled) => {
+    const enabledBool = !!enabled;
+    console.log('[IPC] set-wake-word-enabled received:', enabledBool);
+    store.set('wakeWordEnabled', enabledBool);
+
     try {
-      if (!payload || typeof payload.text !== 'string' || payload.text.trim().length === 0) {
-        console.warn('[IPC] proof-paste: Missing text payload.');
-        return { ok: false, error: 'No text provided.' };
-      }
-
       const pythonShell = getPythonShell();
-      if (!pythonShell || typeof pythonShell.send !== 'function') {
-        console.error('[IPC] proof-paste: Python backend not available.');
-        return { ok: false, error: 'Backend not ready.' };
+      if (pythonShell && pythonShell.send) {
+        const configPayload = {
+          wakeWords: store.get('wakeWords', { dictate: [] }),
+          filterFillerWords: store.get('filterFillerWords', true),
+          fillerWords: store.get('fillerWords', []),
+          autoStopOnSilence: store.get('autoStopOnSilence', true),
+          wakeWordEnabled: enabledBool
+        };
+        const savedAsrModel = store.get('selectedAsrModel');
+        if (savedAsrModel) {
+          configPayload.selectedAsrModel = savedAsrModel;
+        }
+        const msg = `CONFIG:${JSON.stringify(configPayload)}`;
+        pythonShell.send(msg);
+        console.log('[IPC] Wake word setting pushed to Python backend.');
       }
-
-      const message = {
-        text: payload.text
-      };
-      if (payload.prompt && typeof payload.prompt === 'string' && payload.prompt.trim().length > 0) {
-        message.prompt = payload.prompt;
-      }
-
-      const serialized = JSON.stringify(message);
-      pythonShell.send(`PASTE_PROOF:${serialized}`);
-      console.log('[IPC] proof-paste command forwarded to Python backend.');
-      return { ok: true };
-    } catch (error) {
-      console.error('[IPC] proof-paste: Failed to forward command.', error);
-      return { ok: false, error: error.message || 'Unexpected error.' };
+    } catch (e) {
+      console.error('[IPC] Error pushing wake word toggle to Python backend:', e);
     }
   });
 
@@ -78,23 +77,21 @@ function initializeIpcHandlers() {
       if (settings.wakeWords) {
         store.set('wakeWords', settings.wakeWords);
       }
-      // Save prompts
-      if (settings.proofingPrompt) {
-        store.set('proofingPrompt', settings.proofingPrompt);
-      }
-      if (settings.letterPrompt) {
-        store.set('letterPrompt', settings.letterPrompt);
-      }
-      // Save model selections
-      if (settings.selectedProofingModel) {
-        store.set('selectedProofingModel', settings.selectedProofingModel);
-      }
-      if (settings.selectedLetterModel) {
-        store.set('selectedLetterModel', settings.selectedLetterModel);
+      if (typeof settings.wakeWordEnabled === 'boolean') {
+        store.set('wakeWordEnabled', settings.wakeWordEnabled);
       }
       // Save ASR model selection
       if (settings.selectedAsrModel) {
         store.set('selectedAsrModel', settings.selectedAsrModel);
+      }
+      if (typeof settings.filterFillerWords === 'boolean') {
+        store.set('filterFillerWords', settings.filterFillerWords);
+      }
+      if (Array.isArray(settings.fillerWords)) {
+        store.set('fillerWords', settings.fillerWords);
+      }
+      if (typeof settings.autoStopOnSilence === 'boolean') {
+        store.set('autoStopOnSilence', settings.autoStopOnSilence);
       }
       console.log('[IPC] Settings saved to store.');
 
@@ -103,11 +100,11 @@ function initializeIpcHandlers() {
         const pythonShell = getPythonShell();
         if (pythonShell && pythonShell.send) {
           const configPayload = {
-            wakeWords: store.get('wakeWords', { dictate: [], proofread: [], letter: [] }),
-            proofingPrompt: store.get('proofingPrompt', ''),
-            letterPrompt: store.get('letterPrompt', ''),
-            selectedProofingModel: store.get('selectedProofingModel', ''),
-            selectedLetterModel: store.get('selectedLetterModel', '')
+            wakeWords: store.get('wakeWords', { dictate: [] }),
+            filterFillerWords: store.get('filterFillerWords', true),
+            fillerWords: store.get('fillerWords', []),
+            autoStopOnSilence: store.get('autoStopOnSilence', true),
+            wakeWordEnabled: store.get('wakeWordEnabled', true)
           };
           const savedAsrModel = store.get('selectedAsrModel');
           if (savedAsrModel) {
@@ -128,28 +125,93 @@ function initializeIpcHandlers() {
   // Handle settings loading
   ipcMain.handle('load-settings', async () => {
     const settings = {
-      wakeWords: store.get('wakeWords', { dictate: [], proofread: [], letter: [] }),
-      proofingPrompt: store.get('proofingPrompt', ''),
-      letterPrompt: store.get('letterPrompt', ''),
-      selectedProofingModel: store.get('selectedProofingModel', ''),
-      selectedLetterModel: store.get('selectedLetterModel', ''),
-      selectedAsrModel: store.get('selectedAsrModel', '')
+      wakeWords: store.get('wakeWords', { dictate: [] }),
+      selectedAsrModel: store.get('selectedAsrModel', ''),
+      filterFillerWords: store.get('filterFillerWords', true),
+      fillerWords: store.get('fillerWords', []),
+      autoStopOnSilence: store.get('autoStopOnSilence', true),
+      wakeWordEnabled: store.get('wakeWordEnabled', true)
     };
     console.log('[IPC] load-settings: returning', settings);
     return settings;
   });
 
-  // Handle request for available models
-  ipcMain.handle('get-available-models', async () => {
-    console.log('[IPC] get-available-models: Attempting to fetch. Current actualAvailableLLMs from electron_python.js:', getActualAvailableLLMs());
-    const models = getActualAvailableLLMs(); // Get models from Python via electron_python.js
-    if (!models || models.length === 0) {
-      console.warn('[IPC] get-available-models: No models returned from Python or list is empty. Check Python startup and MODELS_LIST message.');
-      // Optionally return a default or error indicator to the settings UI
-      return [{ id: '', name: 'Error: No models loaded' }];
+  ipcMain.handle('ensure-model', async (_event, modelId) => {
+    console.log('[IPC] ensure-model received:', modelId);
+    const pythonShell = getPythonShell();
+    if (!modelId) {
+      return { success: false, error: 'Missing model identifier.' };
     }
-    console.log('[IPC] get-available-models: returning', models);
-    return models;
+    if (!pythonShell || !pythonShell.send) {
+      console.error('[IPC] Python shell not available for ENSURE_MODEL command');
+      return { success: false, error: 'Python backend not available.' };
+    }
+
+    return new Promise((resolve) => {
+      const requestId = `ensure_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      let resolved = false;
+
+      const cleanup = () => {
+        pythonShell.removeListener('message', messageHandler);
+      };
+
+      const resolveOnce = (payload) => {
+        if (!resolved) {
+          resolved = true;
+          cleanup();
+          resolve(payload);
+        }
+      };
+
+      const messageHandler = (message) => {
+        if (typeof message !== 'string') {
+          return;
+        }
+        if (message.startsWith(`MODEL_READY:${requestId}:`)) {
+          const prefix = `MODEL_READY:${requestId}:`;
+          const jsonPayload = message.substring(prefix.length);
+          try {
+            const parsed = JSON.parse(jsonPayload);
+            resolveOnce(parsed);
+          } catch (error) {
+            resolveOnce({ success: false, error: `Malformed MODEL_READY payload: ${error}` });
+          }
+        } else if (message.startsWith(`MODEL_ERROR:${requestId}:`)) {
+          const prefix = `MODEL_ERROR:${requestId}:`;
+          const jsonPayload = message.substring(prefix.length);
+          try {
+            const parsed = JSON.parse(jsonPayload);
+            resolveOnce(parsed);
+          } catch (error) {
+            resolveOnce({ success: false, error: `Malformed MODEL_ERROR payload: ${error}` });
+          }
+        }
+      };
+
+      pythonShell.on('message', messageHandler);
+      pythonShell.send(`ENSURE_MODEL:${requestId}:${modelId}`);
+
+      setTimeout(() => {
+        resolveOnce({ success: false, error: 'Timed out while preparing model assets.' });
+      }, 120000); // 2 minute timeout for large downloads
+    });
+  });
+
+  ipcMain.handle('history:list', async () => {
+    return historyService.getHistorySummary();
+  });
+
+  ipcMain.handle('history:entry', async (_event, entryId) => {
+    return historyService.getHistoryEntry(entryId);
+  });
+
+  ipcMain.handle('history:delete', async (_event, entryId) => {
+    try {
+      return historyService.deleteHistoryEntry(entryId);
+    } catch (error) {
+      console.error('[IPC] history:delete failed:', error);
+      return { success: false, error: error?.message || 'Failed to delete history entry.' };
+    }
   });
 
   // Handle vocabulary API calls

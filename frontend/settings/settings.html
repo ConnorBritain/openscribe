@@ -23,9 +23,7 @@
     <div id="sidebar">
         <h2>Settings</h2>
         <ul>
-            <li id="nav-wakewords" class="active">Wake Words</li>
-            <li id="nav-prompts">Prompts</li>
-            <li id="nav-models">AI Models</li>
+            <li id="nav-wakewords" class="active">Dictation</li>
             <li id="nav-asr">ASR Model</li>
             <li id="nav-vocabulary">Vocabulary</li>
             <!-- Add other sections as needed -->
@@ -34,60 +32,39 @@
 
     <div id="content">
         <div id="section-wakewords" class="settings-section">
-            <h2>Wake Words</h2>
-            <p>Enter the words or phrases (comma-separated) to trigger specific actions.</p>
+            <h2>Dictation</h2>
+            <p>Configure how the assistant listens and cleans up your speech.</p>
             <div>
                 <label for="wake-words-dictate-input">Dictation Wake Word(s):</label>
                 <input type="text" id="wake-words-dictate-input" placeholder="e.g., note, dictate">
             </div>
-             <div>
-                <label for="wake-words-proofread-input">Proofread Wake Word(s):</label>
-                <input type="text" id="wake-words-proofread-input" placeholder="e.g., proof, check">
+            <div style="margin: 10px 0;">
+                <label for="wake-word-enabled-toggle" style="display: flex; align-items: center; gap: 8px; font-weight: normal;">
+                    <input type="checkbox" id="wake-word-enabled-toggle" checked>
+                    Listen for wake words (voice activation)
+                </label>
+                <small style="display:block; color:#666; margin-top:4px;">Turn off to rely on hotkeys/manual controls only.</small>
             </div>
-             <div>
-                <label for="wake-words-letter-input">Letter Wake Word(s):</label>
-                <input type="text" id="wake-words-letter-input" placeholder="e.g., letter, message">
+            <div style="margin: 12px 0;">
+                <label for="filter-filler-toggle" style="display: flex; align-items: center; gap: 8px; font-weight: normal;">
+                    <input type="checkbox" id="filter-filler-toggle">
+                    Remove filler words automatically
+                </label>
             </div>
-            <button id="save-wake-words-button">Save Wake Words</button>
+            <div>
+                <label for="filler-words-input">Filler words to remove:</label>
+                <textarea id="filler-words-input" placeholder="um, uh, ah, er"></textarea>
+                <small style="display:block; color:#666; margin-top:4px;">Comma-separated list (e.g., um, uh, er)</small>
+            </div>
+            <div style="margin: 12px 0;">
+                <label for="auto-stop-toggle" style="display: flex; align-items: center; gap: 8px; font-weight: normal;">
+                    <input type="checkbox" id="auto-stop-toggle" checked>
+                    Automatically stop dictation after silence
+                </label>
+                <small style="display:block; color:#666; margin-top:4px;">When off, dictation continues until you stop it manually.</small>
+            </div>
+            <button id="save-dictation-button">Save Dictation Settings</button>
             <p id="wake-words-status" style="color: green; margin-top: 10px;"></p>
-        </div>
-
-        <div id="section-prompts" class="settings-section" style="display: none;">
-            <h2>Prompts</h2>
-            <!-- Prompt settings will go here -->
-            <p>Configure the prompts used for different AI tasks.</p>
-             <div>
-                <label for="proofing-prompt-input">Proofreading Prompt:</label>
-                <textarea id="proofing-prompt-input" placeholder="Enter the prompt for proofreading... Use {text} as a placeholder for the dictated text."></textarea>
-            </div>
-             <div>
-                <label for="letter-prompt-input">Letter Writing Prompt:</label>
-                <textarea id="letter-prompt-input" placeholder="Enter the prompt for letter writing... Use {text} as a placeholder for the dictated text."></textarea>
-            </div>
-            <button id="save-prompts-button">Save Prompts</button>
-             <p id="prompts-status" style="color: green; margin-top: 10px;"></p>
-        </div>
-
-        <div id="section-models" class="settings-section" style="display: none;">
-            <h2>AI Models</h2>
-            <!-- Model selection will go here -->
-             <p>Select the AI models to use for different tasks.</p>
-             <div>
-                 <label for="proofing-model-select">Proofreading Model:</label>
-                 <select id="proofing-model-select">
-                     <option value="">Loading...</option>
-                     <!-- Models will be populated dynamically -->
-                 </select>
-             </div>
-             <div>
-                 <label for="letter-model-select">Letter Writing Model:</label>
-                 <select id="letter-model-select">
-                     <option value="">Loading...</option>
-                     <!-- Models will be populated dynamically -->
-                 </select>
-             </div>
-             <button id="save-models-button">Save Model Selection</button>
-             <p id="models-status" style="color: green; margin-top: 10px;"></p>
         </div>
 
     </div>

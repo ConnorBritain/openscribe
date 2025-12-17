@@ -89,51 +89,14 @@ CHIME_SOUND_FILE = resolve_resource_path("chime.wav")  # Currently unused, but k
 MODELS_ROOT = resolve_resource_path("models")
 
 # --- Model Configurations ---
-LLM_TEMPERATURE = 0.1  # Controls randomness, lower is more deterministic
-LLM_SAMPLERS = []  # e.g., ["top_k", "top_p"] if supported and desired
-LLM_REPETITION_PENALTY = (
-    1.1  # Penalizes repetition, typical values are 1.0 (no penalty) to 1.2
-)
-LLM_TOP_P = 0.95  # Nucleus sampling: considers the smallest set of tokens whose cumulative probability exceeds top_p
-LLM_MAX_TOKENS_TO_GENERATE = 4096  # Maximum number of tokens the LLM should generate (increased for DeepSeek R1 reasoning models)
 AVAILABLE_ASR_MODELS = {
     # Curated stable set only
     "Parakeet-TDT-0.6B-v2": "mlx-community/parakeet-tdt-0.6b-v2",
+    "Parakeet-TDT-0.6B-v3": "mlx-community/parakeet-tdt-0.6b-v3",
     "Whisper (large-v3-turbo)": "mlx-community/whisper-large-v3-turbo",
+    "Voxtral Mini 3B (bf16)": "mlx-community/Voxtral-Mini-3B-2507-bf16",
 }
 DEFAULT_ASR_MODEL = "mlx-community/whisper-large-v3-turbo"
-
-# WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo" # Or choose another compatible model
-# WHISPER_MODEL = "mlx-community/parakeet-tdt-0.6b-v2" # Or choose another compatible model
-DEFAULT_LLM = "mlx-community/Qwen3-8B-4bit"
-
-# LLM catalog
-MXFP4_MODEL_KEY = "GPT-OSS-20B-MXFP4-Q4"
-MXFP4_MODEL_ID = "mlx-community/gpt-oss-20b-MXFP4-Q4"
-
-AVAILABLE_LLMS = {
-    "Qwen3-8B-4bit": "mlx-community/Qwen3-8B-4bit",
-    "Qwen3-14B-4bit-AWQ": "mlx-community/Qwen3-14B-4bit-AWQ",
-    "DeepSeek-R1-DWQ-8B-4bit": "mlx-community/DeepSeek-R1-0528-Qwen3-8B-4bit-DWQ",
-    # GPT-OSS-20B Integration
-    "GPT-OSS-20B-Q4-HI": "nightmedia/gpt-oss-20b-q4-hi-mlx",  # 20B parameters, 4-bit quantization, enhanced reasoning
-    # Status: ✅ Model available and tested
-    # Expected benefits: Enhanced reasoning, chain-of-thought, configurable reasoning levels
-    # Memory requirements: ~13GB RAM usage, 20.9B parameters
-    # Features: Analysis channel for reasoning visibility, professional text enhancement
-    MXFP4_MODEL_KEY: MXFP4_MODEL_ID,  # MLX-native MXFP4 quantization, see docs/mlx_upgrade_mxfp4_notes.md
-    # Add other models as needed
-}
-
-# Optional display metadata for Electron UI
-LLM_DISPLAY_NAMES = {
-    MXFP4_MODEL_KEY: "GPT-OSS-20B-MXFP4-Q4 (mlx-lm ≥0.28.3, ~15GB RAM)",
-}
-
-# Minimum mlx-lm versions required for specific models
-LLM_MIN_MLX_LM_VERSION = {
-    MXFP4_MODEL_KEY: "0.28.3",
-}
 
 # --- Prompts ---
 DEFAULT_WHISPER_PROMPT = (
@@ -142,26 +105,10 @@ DEFAULT_WHISPER_PROMPT = (
     "Use appropriate terminology when needed."
 )
 
-DEFAULT_PROOFREAD_PROMPT = (
-    "You are proofreading text that will be entered into a professional document.\n"
-    "Correct any grammatical errors, spelling mistakes, or awkward phrasing.\n"
-    "Ensure the text is clear, concise, and maintains accuracy.\n"
-    # "Return only the corrected version without adding any extra comments, context, or introductory phrases."
-)
-
-DEFAULT_LETTER_PROMPT = (
-    "You are finalizing text that will be sent as a professional message.\n"
-    "Ensure the text is grammatically correct, clear, concise, and maintains accuracy.\n"
-    "Format it appropriately for professional communication.\n"
-    "Return only the finalized message without adding any extra comments, context, or introductory phrases."
-)
-
 # --- Hotkeys ---
 # Define commands associated with hotkeys
 COMMAND_TOGGLE_ACTIVE = "toggle_active"
 COMMAND_START_DICTATE = "start_dictate"
-COMMAND_START_PROOFREAD = "start_proofread"
-COMMAND_START_LETTER = "start_letter"
 COMMAND_STOP_DICTATE = "stop_dictate"  # Added for explicit stop hotkey
 COMMAND_ABORT_DICTATE = "abort_dictate"  # Added for abort/cancel hotkey
 COMMAND_RESTART = "restart"
@@ -174,8 +121,6 @@ COMMAND_TOGGLE_MINI_MODE = "toggle_mini_mode"  # Added for mini mode toggle
 # Categories should match keys in command_map in audio_handler.py
 WAKE_WORDS = {
     "dictate": ["note", "dictation", "dictate"],
-    "proofread": ["proof", "proofread"],
-    "letter": ["letter"],
 }
 
 # Define key combinations (using pynput format)
@@ -184,8 +129,6 @@ WAKE_WORDS = {
 HOTKEY_COMBINATIONS = {
     frozenset({Key.cmd, Key.shift, KeyCode.from_char("a")}): COMMAND_TOGGLE_ACTIVE,
     frozenset({Key.cmd, Key.shift, KeyCode.from_char("d")}): COMMAND_START_DICTATE,
-    frozenset({Key.cmd, Key.shift, KeyCode.from_char("p")}): COMMAND_START_PROOFREAD,
-    frozenset({Key.cmd, Key.shift, KeyCode.from_char("l")}): COMMAND_START_LETTER,
     frozenset({Key.cmd, Key.shift, KeyCode.from_char("s")}): COMMAND_STOP_DICTATE,
     frozenset({Key.cmd, Key.shift, KeyCode.from_char("r")}): COMMAND_RESTART,
     frozenset({Key.cmd, Key.shift, KeyCode.from_char("h")}): COMMAND_SHOW_HOTKEYS,

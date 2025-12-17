@@ -1,12 +1,12 @@
 // electron_windows.js
-// Handles main/floating window and proofing window management
+// Handles main window and settings window management
 
 const { BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const { startPythonBackend } = require('./electron_python');
 
 let mainWindow = null;
-// proofingWindow is no longer needed
+// No separate proofing window in note-only mode
 
 function createWindow() {
   // Calculate position for main window (top-right corner)
@@ -78,6 +78,7 @@ function getMainWindow() {
 
 
 let settingsWindow = null;
+let historyWindow = null;
 
 function createSettingsWindow(section = null) {
   if (settingsWindow) {
@@ -117,5 +118,41 @@ function createSettingsWindow(section = null) {
   });
 }
 
-module.exports = { createWindow, getMainWindow, createSettingsWindow };
+function createHistoryWindow() {
+  if (historyWindow) {
+    historyWindow.focus();
+    return historyWindow;
+  }
 
+  historyWindow = new BrowserWindow({
+    width: 960,
+    height: 640,
+    title: 'Dictation History',
+    minWidth: 720,
+    minHeight: 480,
+    webPreferences: {
+      preload: path.join(__dirname, '../frontend/history/history_preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      devTools: true
+    },
+    show: false
+  });
+
+  historyWindow.loadFile(path.join(__dirname, '../frontend/history/history.html'))
+    .catch((error) => {
+      console.error('[HistoryWindow] Failed to load history.html:', error);
+    });
+
+  historyWindow.once('ready-to-show', () => {
+    historyWindow.show();
+  });
+
+  historyWindow.on('closed', () => {
+    historyWindow = null;
+  });
+
+  return historyWindow;
+}
+
+module.exports = { createWindow, getMainWindow, createSettingsWindow, createHistoryWindow };

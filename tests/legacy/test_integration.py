@@ -292,7 +292,6 @@ class IntegrationTester:
             "selectedAsrModel": "mlx-community/new-parakeet-model",
             "filterFillerWords": True,
             "fillerWords": ["new", "test", "words"],
-            "proofingPrompt": "Custom proofing prompt",
             "wakeWords": {"dictate": ["custom", "words"]}
         }
         

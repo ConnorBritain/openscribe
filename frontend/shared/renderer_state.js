@@ -1,203 +1,196 @@
 // renderer_state.js
 // Handles UI state management and status indicator updates
 
-import { statusDot, stopButton, cancelButton, modeIndicator, processingIndicator, amplitudes } from './renderer_ui.js';
+import { statusDot, stopButton, cancelButton, modeIndicator, processingIndicator, amplitudes, wakeWordToggleButton } from './renderer_ui.js';
 import { conflictNotificationManager } from './renderer_conflict_ui.js';
 
 // Exported variable for the audio visualizer and other potential consumers
-export let currentAudioState = 'inactive'; // This will be updated by updateStatusIndicator
-export let isAlwaysOnTop = false; // This seems unrelated to current changes, keep it.
+export let currentAudioState = 'inactive';
+export let isAlwaysOnTop = false;
+
+const STATUS_VISUALS = {
+  green: { color: '#34c759', shadow: '#34c759', visualizer: 'dictation' },
+  blue: { color: '#007aff', shadow: '#007aff', visualizer: 'listening' },
+  orange: { color: '#ff9500', shadow: '#ff9500', visualizer: 'inactive' },
+  red: { color: '#ff3b30', shadow: '#ff3b30', visualizer: 'inactive' },
+  grey: { color: '#8e8e93', shadow: null, visualizer: 'inactive' },
+  gray: { color: '#8e8e93', shadow: null, visualizer: 'inactive' }
+};
+
+function resolveStatusDot() {
+  return document.getElementById('status-dot') || statusDot;
+}
+
+function setVisualizerState(nextState) {
+  const validStates = ['dictation', 'listening'];
+  const desired = validStates.includes(nextState) ? nextState : 'inactive';
+  const previous = currentAudioState;
+  currentAudioState = desired;
+
+  if (!amplitudes) {
+    return;
+  }
+
+  if (desired === 'inactive' || (previous === 'dictation' && desired !== 'dictation')) {
+    amplitudes.fill(0);
+  }
+}
+
+function applyStatusDotVisuals(colorKey, overrideVisualizerState) {
+  const dot = resolveStatusDot();
+  if (!dot) {
+    if (overrideVisualizerState) {
+      setVisualizerState(overrideVisualizerState);
+    }
+    return;
+  }
+
+  const normalizedKey = colorKey ? colorKey.toLowerCase() : '';
+  const visuals = STATUS_VISUALS[normalizedKey];
+
+  if (visuals) {
+    dot.style.backgroundColor = visuals.color;
+    dot.style.boxShadow = visuals.shadow ? `0 0 5px ${visuals.shadow}` : 'none';
+  } else if (typeof colorKey === 'string' && colorKey) {
+    console.warn('[RendererState] Unknown status color:', colorKey);
+  }
+
+  const targetVisualizerState = overrideVisualizerState || (visuals ? visuals.visualizer : undefined);
+  if (targetVisualizerState) {
+    setVisualizerState(targetVisualizerState);
+  }
+}
 
 // Module-level state, managed by updateStatusIndicator
 let internalState = {
-  programActive: false, // Start as false until first STATE message confirms microphone availability
+  programActive: false,
   audioState: 'inactive',
   isDictating: false,
   currentMode: null,
-  microphoneError: null, // Store microphone error information
-  lastConflictCheck: 0 // Track when we last checked for conflicts
+  microphoneError: null,
+  lastConflictCheck: 0,
+  wakeWordEnabled: true
 };
 
+function updateWakeWordToggle(enabled, programActive) {
+  if (!wakeWordToggleButton) {
+    return;
+  }
+  const isEnabled = enabled !== false;
+  wakeWordToggleButton.dataset.enabled = isEnabled ? 'true' : 'false';
+  wakeWordToggleButton.classList.toggle('wakeword-off', !isEnabled);
+  wakeWordToggleButton.setAttribute('aria-pressed', isEnabled ? 'true' : 'false');
+  wakeWordToggleButton.textContent = isEnabled ? 'Wake Word On' : 'Wake Word Off';
+  // Keep interactive even if mic unavailable so the preference can be set ahead of time
+  wakeWordToggleButton.disabled = false;
+  if (!programActive) {
+    wakeWordToggleButton.title = 'Wake words paused until microphone is available';
+  } else {
+    wakeWordToggleButton.title = 'Toggle listening for wake words';
+  }
+}
+
 export function updateStatusIndicator(newState) {
-  // Update internalState with new values, providing defaults if properties are missing
   internalState.programActive = typeof newState.programActive === 'boolean' ? newState.programActive : internalState.programActive;
-  internalState.audioState = newState.audioState || internalState.audioState; // The actual state from Python (activation, dictation, processing)
+  internalState.audioState = newState.audioState || internalState.audioState;
   internalState.isDictating = typeof newState.isDictating === 'boolean' ? newState.isDictating : internalState.isDictating;
   internalState.currentMode = newState.currentMode !== undefined ? newState.currentMode : internalState.currentMode;
   internalState.microphoneError = newState.microphoneError || null;
+  internalState.wakeWordEnabled = typeof newState.wakeWordEnabled === 'boolean' ? newState.wakeWordEnabled : internalState.wakeWordEnabled;
+
+  updateWakeWordToggle(internalState.wakeWordEnabled, internalState.programActive);
 
   console.log('[RendererState] updateStatusIndicator called with:', newState);
   console.log('[RendererState] Internal state after update:', internalState);
 
-  if (!statusDot) return; // Guard if UI element isn't ready
+  const dot = resolveStatusDot();
+  if (!dot) {
+    return;
+  }
 
-  const previousCurrentAudioStateForTransition = currentAudioState; // Store previous *exported* currentAudioState for transition logic
-
-  // If program is not active, force UI to inactive state and handle microphone errors
   if (!internalState.programActive) {
-    if (statusDot) {
-      // Use red color if there's a microphone error, otherwise grey
-      if (internalState.microphoneError) {
-        statusDot.style.backgroundColor = '#ff3b30'; // Red for error
-        statusDot.style.boxShadow = '0 0 5px #ff3b30';
-
-        // Add error tooltip if supported
-        statusDot.title = `Microphone Error: ${internalState.microphoneError}`;
-
-        // Pulse effect for error state
-        statusDot.style.animation = 'pulse-error 2s infinite';
-      } else {
-        statusDot.style.backgroundColor = '#8e8e93'; // Grey
-        statusDot.style.boxShadow = 'none';
-        statusDot.title = '';
-        statusDot.style.animation = '';
-      }
+    if (internalState.microphoneError) {
+      applyStatusDotVisuals('red', 'inactive');
+      dot.title = `Microphone Error: ${internalState.microphoneError}`;
+      dot.style.animation = 'pulse-error 2s infinite';
+    } else {
+      applyStatusDotVisuals('grey', 'inactive');
+      dot.title = '';
+      dot.style.animation = '';
     }
 
     if (stopButton) stopButton.disabled = true;
     if (cancelButton) cancelButton.disabled = true;
-    currentAudioState = 'inactive'; // For visualizer
+    setVisualizerState('inactive');
     if (modeIndicator) modeIndicator.style.display = 'none';
     if (processingIndicator) processingIndicator.style.display = 'none';
-    if (amplitudes) amplitudes.fill(0); // Clear waveform
-
-    if (window.electronAPI && window.electronAPI.showProofingWindow) {
-      window.electronAPI.showProofingWindow(false);
-    }
-
-    // Tray state updates are handled by backend STATUS messages, no need to duplicate here
-    // const trayState = internalState.microphoneError ? 'error' : 'inactive';
-    // console.log('[RendererState] Sending tray state:', trayState, '(programActive:', internalState.programActive, ')');
-    // if (window.electronAPI && window.electronAPI.sendTrayState) {
-    //   window.electronAPI.sendTrayState(trayState);
-    // }
+    updateWakeWordToggle(internalState.wakeWordEnabled, internalState.programActive);
     return;
   }
 
-  // Clear any error state when program becomes active
-  if (statusDot) {
-    statusDot.title = '';
-    statusDot.style.animation = '';
-  }
+  dot.title = '';
+  dot.style.animation = '';
 
-  // Determine effective audio state for UI based on isDictating and actual audioState
-  // This effectiveAudioState is what the user sees (dot color, tray icon)
   let effectiveVisibleAudioState = internalState.audioState;
   if (internalState.isDictating) {
     effectiveVisibleAudioState = 'dictation';
   }
 
-  // Update the exported currentAudioState that the visualizer loop uses
-  // The visualizer should only animate when effectiveVisibleAudioState is 'dictation'
-  currentAudioState = effectiveVisibleAudioState === 'dictation' ? 'dictation' : 'inactive';
-  // More precise: visualizer should be active if isDictating is true,
-  // and the raw audioState is 'dictation'.
-  // The effectiveVisibleAudioState already captures this.
-  // So, if effectiveVisibleAudioState is 'dictation', currentAudioState (for animation) is 'dictation'.
-  // Otherwise, for 'activation' or 'processing', animation should be off.
-  if (effectiveVisibleAudioState !== 'dictation') {
-    currentAudioState = 'inactive'; // Ensure animation is off unless truly dictating
-  }
-
-
-  // Manage listening animation buffer: clear amplitudes if not in 'dictation' state
-  if (currentAudioState !== 'dictation') { // Check the animation-driving state
-    if (amplitudes) amplitudes.fill(0);
-  }
-  // Additional check: if transitioning out of dictation, ensure waveform is cleared
-  if (previousCurrentAudioStateForTransition === 'dictation' && currentAudioState !== 'dictation') {
-    if (amplitudes) amplitudes.fill(0);
-  }
-
-  // Reset indicators before setting them based on the new state
   if (modeIndicator) modeIndicator.style.display = 'none';
   if (processingIndicator) processingIndicator.style.display = 'none';
 
   switch (effectiveVisibleAudioState) {
   case 'activation':
-  case 'preparing': // Treat preparing state like activation (blue indicator)
-    if (statusDot) {
-      statusDot.style.backgroundColor = '#007aff'; // Blue
-      statusDot.style.boxShadow = '0 0 5px #007aff';
+  case 'preparing':
+    if (internalState.wakeWordEnabled) {
+      applyStatusDotVisuals('blue', 'listening');
+    } else {
+      applyStatusDotVisuals('grey', 'inactive');
     }
     if (stopButton) stopButton.disabled = true;
     if (cancelButton) cancelButton.disabled = true;
     break;
   case 'dictation':
-    if (statusDot) {
-      statusDot.style.backgroundColor = '#34c759'; // Green
-      statusDot.style.boxShadow = '0 0 5px #34c759';
-    }
+    applyStatusDotVisuals('green', 'dictation');
     if (stopButton) stopButton.disabled = false;
     if (cancelButton) cancelButton.disabled = false;
-
-    if (modeIndicator && internalState.currentMode) {
-      if (internalState.currentMode === 'dictate') {
-        modeIndicator.textContent = 'Note';
-        modeIndicator.style.display = 'inline-block';
-      } else if (internalState.currentMode === 'proofread') {
-        modeIndicator.textContent = 'Proof';
-        modeIndicator.style.display = 'inline-block';
-        if (window.electronAPI && window.electronAPI.showProofingWindow) {
-          window.electronAPI.showProofingWindow(true);
-        }
-      } else if (internalState.currentMode === 'letter') {
-        modeIndicator.textContent = 'Letter';
-        modeIndicator.style.display = 'inline-block';
-      }
+    if (modeIndicator && internalState.currentMode === 'dictate') {
+      modeIndicator.textContent = 'Note';
+      modeIndicator.style.display = 'inline-block';
     }
     break;
   case 'processing':
-    if (statusDot) {
-      statusDot.style.backgroundColor = '#ff9500'; // Orange
-      statusDot.style.boxShadow = '0 0 5px #ff9500';
-    }
+    applyStatusDotVisuals('orange', 'inactive');
     if (stopButton) stopButton.disabled = true;
     if (cancelButton) cancelButton.disabled = true;
     if (processingIndicator) processingIndicator.style.display = 'inline-block';
-    if (internalState.currentMode === 'proofread' && window.electronAPI && window.electronAPI.showProofingWindow) {
-      window.electronAPI.showProofingWindow(true);
-    }
     break;
-  case 'inactive': // This case would be hit if programActive is true, but audioState is 'inactive'
+  case 'inactive':
   default:
-    if (statusDot) {
-      statusDot.style.backgroundColor = '#8e8e93'; // Grey
-      statusDot.style.boxShadow = 'none';
-    }
+    applyStatusDotVisuals('grey', 'inactive');
     if (stopButton) stopButton.disabled = true;
     if (cancelButton) cancelButton.disabled = true;
-    currentAudioState = 'inactive'; // Ensure animation state reflects inactivity
     if (modeIndicator) modeIndicator.style.display = 'none';
     if (processingIndicator) processingIndicator.style.display = 'none';
-    if (window.electronAPI && window.electronAPI.showProofingWindow) {
-      window.electronAPI.showProofingWindow(false);
-    }
     break;
   }
 
-  // Tray state updates are handled by backend STATUS messages, no need to duplicate here
-  // console.log('[RendererState] Sending tray state:', effectiveVisibleAudioState, '(programActive:', internalState.programActive, ')');
-  // if (window.electronAPI && window.electronAPI.sendTrayState) {
-  //   window.electronAPI.sendTrayState(effectiveVisibleAudioState);
-  // }
+  updateWakeWordToggle(internalState.wakeWordEnabled, internalState.programActive);
 }
 
-// Initialize the UI to the correct initial state (grey) immediately when module loads
 export function initializeStatusIndicator() {
   console.log('[RendererState] Initializing status indicator to inactive state');
-  console.log('[RendererState] statusDot element:', statusDot);
+  const dot = resolveStatusDot();
+  console.log('[RendererState] statusDot element:', dot);
 
-  // Directly set the status dot to grey without going through updateStatusIndicator
-  if (statusDot) {
-    statusDot.style.backgroundColor = '#8e8e93'; // Grey
-    statusDot.style.boxShadow = 'none';
+  if (dot) {
+    dot.style.backgroundColor = '#8e8e93';
+    dot.style.boxShadow = 'none';
     console.log('[RendererState] Successfully set status dot to grey');
   } else {
     console.warn('[RendererState] statusDot element not found during initialization');
   }
 
-  // Also call updateStatusIndicator to ensure all state is consistent
   updateStatusIndicator({
     programActive: false,
     audioState: 'inactive',
@@ -207,28 +200,21 @@ export function initializeStatusIndicator() {
   });
 }
 
-// Get current microphone error (if any)
 export function getMicrophoneError() {
   return internalState.microphoneError;
 }
 
-// Check if there's a microphone error
 export function hasMicrophoneError() {
   return !!internalState.microphoneError;
 }
 
-// Handle status messages and detect microphone conflicts
 export function handleStatusMessage(statusText, color) {
-  // Store microphone error information for visual indicators
   if (color === 'red' && (statusText.toLowerCase().includes('microphone') || statusText.toLowerCase().includes('audio'))) {
     internalState.microphoneError = statusText;
   } else if (color === 'green' || color === 'blue') {
-    // Clear error state on successful operations
     internalState.microphoneError = null;
   }
 
-  // Detect ACTUAL microphone conflict messages - be more precise
-  // Only trigger on definitive conflict detection messages, not just mentions of browsers
   const definitiveConflictPhrases = [
     'microphone conflict detected',
     'detected active conflict',
@@ -238,32 +224,26 @@ export function handleStatusMessage(statusText, color) {
     'audio input conflict'
   ];
 
-  // Check if this is a definitive conflict message
-  const isDefinitiveConflict = definitiveConflictPhrases.some(phrase =>
+  const isDefinitiveConflict = definitiveConflictPhrases.some((phrase) =>
     statusText.toLowerCase().includes(phrase.toLowerCase())
   );
 
-  // Additional check for specific browser conflict patterns (more precise)
   const isBrowserConflictMessage = statusText.toLowerCase().includes('microphone conflict detected') &&
-                                   (statusText.toLowerCase().includes('safari') ||
-                                    statusText.toLowerCase().includes('chrome') ||
-                                    statusText.toLowerCase().includes('browser'));
+    (statusText.toLowerCase().includes('safari') ||
+     statusText.toLowerCase().includes('chrome') ||
+     statusText.toLowerCase().includes('browser'));
 
-  // Check if this is a suggestion message (these should not trigger the banner)
   const isSuggestionMessage = statusText.includes('💡') ||
-                             statusText.toLowerCase().includes('note:') ||
-                             statusText.toLowerCase().includes('tip:') ||
-                             (statusText.toLowerCase().includes('close') && statusText.toLowerCase().includes('tab')) ||
-                             (statusText.toLowerCase().includes('disable') && statusText.toLowerCase().includes('access'));
+    statusText.toLowerCase().includes('note:') ||
+    statusText.toLowerCase().includes('tip:') ||
+    (statusText.toLowerCase().includes('close') && statusText.toLowerCase().includes('tab')) ||
+    (statusText.toLowerCase().includes('disable') && statusText.toLowerCase().includes('access'));
 
-  // Only show conflict notification for definitive conflicts, not suggestions or diagnostic info
   if ((isDefinitiveConflict || isBrowserConflictMessage) && !isSuggestionMessage) {
     const currentTime = Date.now();
-    // Only show notification if enough time has passed since last one (avoid spam)
-    if (currentTime - internalState.lastConflictCheck > 5000) { // 5 second cooldown
+    if (currentTime - internalState.lastConflictCheck > 5000) {
       internalState.lastConflictCheck = currentTime;
 
-      // Extract useful conflict information
       let conflictDetails = statusText;
       if (statusText.toLowerCase().includes('safari') || statusText.toLowerCase().includes('chrome')) {
         conflictDetails = 'Safari or Chrome is actively using the microphone for dictation';
@@ -273,23 +253,37 @@ export function handleStatusMessage(statusText, color) {
         conflictDetails = 'Another application is using the microphone';
       }
 
-      // Show the prominent conflict banner
       conflictNotificationManager.showConflictBanner(conflictDetails);
     }
   }
 
-  // Log suggestion messages for debugging but don't show banner
   if (isSuggestionMessage) {
     console.log('Conflict suggestion received:', statusText);
   }
+
+  const normalizedColor = typeof color === 'string' ? color.toLowerCase() : '';
+  // Avoid overriding app state for neutral grey messages (e.g., config updates)
+  if (normalizedColor === 'grey' || normalizedColor === 'gray') {
+    return;
+  }
+
+  if (normalizedColor) {
+    let overrideState;
+    if (normalizedColor === 'green') {
+      overrideState = 'dictation';
+    } else if (normalizedColor === 'blue') {
+      overrideState = 'listening';
+    } else {
+      overrideState = 'inactive';
+    }
+    applyStatusDotVisuals(normalizedColor, overrideState);
+  }
 }
 
-// Hide conflict notification (for external use)
 export function hideConflictNotification() {
   conflictNotificationManager.hideConflictBanner();
 }
 
-// Check if conflict notification is visible
 export function isConflictNotificationVisible() {
   return conflictNotificationManager.isConflictVisible();
 }

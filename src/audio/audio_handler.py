@@ -156,6 +156,7 @@ from src.performance_optimizer import start_perf_timer, end_perf_timer
 
 # Import configuration constants
 from src.config import config
+from src.config.settings_manager import settings_manager
 
 
 class AudioHandler:
@@ -198,8 +199,14 @@ class AudioHandler:
         self._sample_rate = config.SAMPLE_RATE
         self._frame_duration_ms = config.FRAME_DURATION_MS
         self._frame_size = config.FRAME_SIZE
+
+        # Silence auto-stop configuration
+        self._auto_stop_on_silence = bool(
+            settings_manager.get_setting("autoStopOnSilence", True)
+        )
         self._audio_format = pyaudio.paInt16
         self._channels = config.CHANNELS
+        self._wake_word_enabled = True
 
         # Check if we're in CI environment (missing key dependencies)
         if not PYAUDIO_AVAILABLE or not WEBRTCVAD_AVAILABLE or not VOSK_AVAILABLE:
@@ -661,13 +668,14 @@ class AudioHandler:
             # Keep _program_active as False during preparing - microphone not ready for use yet
             self._log_status("Preparing to listen (initializing audio/Vosk)...", "grey")
 
-        # Send detailed STATE update to Electron for UI logic (e.g., hiding proofing UI)
+        # Send detailed STATE update to Electron for UI logic
         if self.on_status_update:
             is_dictating_bool = self._listening_state == "dictation"
             state_payload = {
                 "audioState": self._listening_state,
                 "isDictating": is_dictating_bool,
                 "programActive": self._program_active,
+                "wakeWordEnabled": self._wake_word_enabled,
                 # currentMode is not managed by AudioHandler, frontend can manage/infer if needed
             }
             try:
@@ -709,6 +717,19 @@ class AudioHandler:
         )  # Keep status update for UI
         self._update_wake_words_internal(wake_words_list)
 
+    def set_auto_silence_stop_enabled(self, enabled: bool):
+        """Enable or disable automatic dictation stop when silence is detected."""
+        enabled_bool = bool(enabled)
+        if self._auto_stop_on_silence == enabled_bool:
+            return
+
+        self._auto_stop_on_silence = enabled_bool
+        state_msg = (
+            "Auto-stop on silence enabled" if enabled_bool else "Auto-stop on silence disabled"
+        )
+        log_text("CONFIG", state_msg)
+        self._log_status(state_msg, "grey")
+
     def _update_wake_words_internal(self, wake_words_obj: dict):
         """Internal helper to process and store wake words from the structured object."""
         from src.utils.utils import log_text  # Ensure log_text is available
@@ -719,8 +740,6 @@ class AudioHandler:
         # Define mapping from object keys to command constants
         command_map = {
             "dictate": config.COMMAND_START_DICTATE,
-            "proofread": config.COMMAND_START_PROOFREAD,
-            "letter": config.COMMAND_START_LETTER,
         }
 
         if not isinstance(wake_words_obj, dict):
@@ -731,7 +750,7 @@ class AudioHandler:
             self._wake_words_config = {}  # Reset config on error
             return
 
-        # Iterate through the categories (dictate, proofread, letter)
+        # Iterate through the categories (dictate only)
         for category, words in wake_words_obj.items():
             command = command_map.get(category)
             if not command:
@@ -781,6 +800,47 @@ class AudioHandler:
             f"Processed wake words config: {len(self._wake_words_config)} entries",
             "grey",
         )
+
+    def set_wake_word_enabled(self, enabled: bool):
+        """Enable or disable wake word detection without stopping hotkeys."""
+        enabled_bool = bool(enabled)
+        if self._wake_word_enabled == enabled_bool:
+            return
+
+        self._wake_word_enabled = enabled_bool
+        status_msg = (
+            "Wake word detection enabled"
+            if enabled_bool
+            else "Wake word detection disabled (hotkeys still work)"
+        )
+        status_color = "green" if enabled_bool else "orange"
+        self._log_status(status_msg, status_color)
+
+        if self.on_status_update:
+            state_payload = {
+                "audioState": self._listening_state,
+                "isDictating": self._listening_state == "dictation",
+                "programActive": self._program_active,
+                "wakeWordEnabled": self._wake_word_enabled,
+            }
+            try:
+                json_state_payload = json.dumps(state_payload)
+                self.on_status_update(f"STATE:{json_state_payload}", "STATE_MSG")
+            except Exception as e:
+                log_text(
+                    "AUDIO_HANDLER_STATE_SEND_ERROR",
+                    f"Error sending wake word state update: {e}",
+                )
+        # If enabling while already in activation, reassert activation to ensure Vosk loop proceeds
+        if enabled_bool:
+            # Keep program active when wake words are on
+            self._program_active = True
+            if self._listening_state in ["activation", "preparing"]:
+                self.set_listening_state("activation")
+
+    def is_wake_word_enabled(self) -> bool:
+        """Return whether wake word detection is currently enabled."""
+        return bool(self._wake_word_enabled)
 
     def _reset_buffering(self):
         """Resets the VAD buffering state and conflict detection counters."""
@@ -893,6 +953,10 @@ class AudioHandler:
     def _handle_wake_word(self, recognized_text):
         """Processes recognized text to check for configured wake words."""
         from src.utils.utils import log_text  # Ensure log_text is available
+
+        if not self._wake_word_enabled:
+            log_text("WAKE_WORD_DEBUG", "Wake word detection is disabled; ignoring recognition result.")
+            return
 
         recognized_text_raw = (
             recognized_text  # Keep original case for logging if needed
@@ -1087,19 +1151,23 @@ class AudioHandler:
                 self._optimize_buffer_memory()
 
             if not is_speech:
-                if self._silence_start_time is None:
-                    self._silence_start_time = time.time()
-                    # Only log significant silence events, not every timer start
+                if not self._auto_stop_on_silence:
+                    # Auto-stop disabled; reset timer to avoid stale values
+                    self._silence_start_time = None
                 else:
-                    silence_duration = time.time() - self._silence_start_time
+                    if self._silence_start_time is None:
+                        self._silence_start_time = time.time()
+                        # Only log significant silence events, not every timer start
+                    else:
+                        silence_duration = time.time() - self._silence_start_time
 
-                    if silence_duration >= config.SILENCE_THRESHOLD_SECONDS:
-                        # Sufficient silence detected; process audio
-                        log_text("AUDIO_AUTO_STOP", f"Auto-stopping after {silence_duration:.1f}s silence")
-                        self._triggered = False
-                        self._silence_start_time = None
-                        self._request_audio_processing()
-                    # Remove verbose intermediate silence logging
+                        if silence_duration >= config.SILENCE_THRESHOLD_SECONDS:
+                            # Sufficient silence detected; process audio
+                            log_text("AUDIO_AUTO_STOP", f"Auto-stopping after {silence_duration:.1f}s silence")
+                            self._triggered = False
+                            self._silence_start_time = None
+                            self._request_audio_processing()
+                        # Remove verbose intermediate silence logging
             else:
                 # Speech is still being detected; reset silence timer
                 self._silence_start_time = None

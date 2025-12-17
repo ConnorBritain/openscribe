@@ -1,8 +1,9 @@
 // renderer_controls.js
 // Handles button clicks and keyboard shortcuts for stop/cancel functionality
 
-import { stopButton, cancelButton, alwaysOnTopButton } from './renderer_ui.js';
+import { stopButton, cancelButton, alwaysOnTopButton, wakeWordToggleButton } from './renderer_ui.js';
 import { logMessage } from './renderer_utils.js';
+import { updateStatusIndicator } from './renderer_state.js';
 
 export function initializeControls() {
   // Stop button click handler
@@ -37,6 +38,28 @@ export function initializeControls() {
         window.electronAPI.toggleAlwaysOnTop();
       } else {
         logMessage('electronAPI.toggleAlwaysOnTop not available', 'error');
+      }
+    });
+  }
+
+  if (wakeWordToggleButton) {
+    wakeWordToggleButton.addEventListener('click', () => {
+      const currentlyEnabled = wakeWordToggleButton.dataset.enabled !== 'false';
+      const nextEnabled = !currentlyEnabled;
+      logMessage(`Wake word toggle clicked -> ${nextEnabled ? 'on' : 'off'}`, 'controls');
+      if (window.electronAPI && window.electronAPI.setWakeWordEnabled) {
+        window.electronAPI.setWakeWordEnabled(nextEnabled);
+        // Optimistically update the UI for responsiveness; authoritative state comes from backend STATE message
+        const provisionalState = {
+          audioState: 'activation',
+          programActive: true,
+          isDictating: false,
+          currentMode: null,
+          wakeWordEnabled: nextEnabled
+        };
+        updateStatusIndicator(provisionalState);
+      } else {
+        logMessage('electronAPI.setWakeWordEnabled not available', 'error');
       }
     });
   }

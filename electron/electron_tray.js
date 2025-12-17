@@ -60,7 +60,7 @@ function setTrayIconByState(state) {
   }
 }
 
-function createTrayIcon(mainWindow, pythonShell, createSettingsWindow, app) {
+function createTrayIcon(getMainWindow, createSettingsWindow, createHistoryWindow, app) {
   if (tray) {
     console.log('Tray icon already exists.');
     return;
@@ -97,22 +97,11 @@ function createTrayIcon(mainWindow, pythonShell, createSettingsWindow, app) {
         }
       }
     },
-    {
-      label: 'Start Proof',
-      click: () => {
-        const { getPythonShell } = require('./electron_python');
-        const pythonShell = getPythonShell();
-        if (pythonShell) {
-          pythonShell.send('start_proofread');
-        } else {
-          console.error('Tray Menu Error: Python backend not running.');
-        }
-      }
-    },
     { label: 'Settings...', accelerator: 'CmdOrCtrl+,', click: createSettingsWindow },
     { label: 'Vocabulary', click: () => createSettingsWindow('vocabulary') },
+    { label: 'History…', click: createHistoryWindow },
     { type: 'separator' },
-    { label: 'Show Floating UI', click: () => { if (mainWindow) mainWindow.show(); } },
+    { label: 'Show Floating UI', click: () => { const win = getMainWindow ? getMainWindow() : null; if (win) win.show(); } },
     { label: 'Quit Citrix Transcriber', accelerator: 'CmdOrCtrl+Q', click: () => { app.quit(); } }
   ]);
   tray.setContextMenu(contextMenu);

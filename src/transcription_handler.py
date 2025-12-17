@@ -66,6 +66,18 @@ except ImportError:
     except Exception:
         print("[WARN] parakeet_mlx not available - Parakeet transcription will be mocked")
 
+try:
+    from mlx_audio.stt import generate as mlx_audio_generate
+    MLX_AUDIO_AVAILABLE = True
+except ImportError:
+    MLX_AUDIO_AVAILABLE = False
+    try:
+        from src.config import config as _cfg
+        if not getattr(_cfg, "MINIMAL_TERMINAL_OUTPUT", False):
+            print("[WARN] mlx-audio not available - Voxtral transcription will be mocked")
+    except Exception:
+        print("[WARN] mlx-audio not available - Voxtral transcription will be mocked")
+
 # Create mock transcription functions if neither library is available
 if not MLX_WHISPER_AVAILABLE and not PARAKEET_MLX_AVAILABLE:
     print("[WARN] No ASR libraries available - all transcription will be mocked")
@@ -188,6 +200,7 @@ class TranscriptionHandler:
         self._sample_rate = config.SAMPLE_RATE
         self.local_model_path_prepared = None
         self.parakeet_model = None
+        self.voxtral_model = None
 
         # Use provided model, or saved settings, or config default (in that order)
         if selected_asr_model:
@@ -212,6 +225,11 @@ class TranscriptionHandler:
         if self.model_type == "whisper":
             self._whisper_backend = self._detect_whisper_backend(self.selected_asr_model)
             self._log_status(f"Selected whisper backend: {self._whisper_backend}", "grey")
+        if self.model_type == "voxtral" and not MLX_AUDIO_AVAILABLE:
+            self._log_status(
+                "Voxtral model selected but mlx-audio is not installed. Install mlx-audio to enable Voxtral transcription.",
+                "red",
+            )
 
         # Light mode to avoid heavy model loads (set CT_LIGHT_MODE=1 to enable)
         self._light_mode = os.getenv("CT_LIGHT_MODE", "0") == "1"
@@ -229,13 +247,37 @@ class TranscriptionHandler:
                     f"Using bundled ASR model from: {bundled_path}", "grey"
                 )
                 self._ensure_hf_offline_env()
+            elif not self._light_mode and (MLX_WHISPER_AVAILABLE or PARAKEET_MLX_AVAILABLE or MLX_AUDIO_AVAILABLE):
+                try:
+                    ensured_path = self.ensure_model_assets(self.selected_asr_model)
+                    if ensured_path:
+                        self.local_model_path_prepared = ensured_path
+                        self._log_status(
+                            f"Model assets prepared at: {ensured_path}", "grey"
+                        )
+                except Exception as prep_err:
+                    self._log_status(
+                        f"Unable to prepare model assets for {self.selected_asr_model}: {prep_err}",
+                        "red",
+                    )
 
         # Load Parakeet model if needed (skip in light mode)
         if not self._light_mode:
             if self.model_type == "parakeet" and PARAKEET_MLX_AVAILABLE:
                 try:
-                    self._log_status(f"Loading Parakeet model: {self.selected_asr_model}", "grey")
-                    self.parakeet_model = parakeet_mlx.from_pretrained(self.selected_asr_model)
+                    load_target = self.local_model_path_prepared or self.selected_asr_model
+                    self._log_status(f"Loading Parakeet model: {load_target}", "grey")
+                    try:
+                        self.parakeet_model = parakeet_mlx.from_pretrained(load_target)
+                    except Exception:
+                        if load_target != self.selected_asr_model:
+                            self._log_status(
+                                "Direct path load failed, retrying with repository id…",
+                                "orange",
+                            )
+                            self.parakeet_model = parakeet_mlx.from_pretrained(self.selected_asr_model)
+                        else:
+                            raise
                     self._log_status("Parakeet model loaded successfully", "grey")
                 except Exception as e:
                     self._log_status(f"Failed to load Parakeet model: {e}", "red")
@@ -244,7 +286,7 @@ class TranscriptionHandler:
                 self.parakeet_model = None
 
         # Check if we're in a CI environment (missing key dependencies)
-        if not MLX_WHISPER_AVAILABLE and not PARAKEET_MLX_AVAILABLE:
+        if not MLX_WHISPER_AVAILABLE and not PARAKEET_MLX_AVAILABLE and not MLX_AUDIO_AVAILABLE:
             self._log_status("Transcription handler initialized in CI mode - dependencies mocked", "orange")
             self.local_model_path_prepared = "./mock_model_path"
             return
@@ -277,9 +319,9 @@ class TranscriptionHandler:
                 "grey",
             )
         elif not self._light_mode and self.model_type == "parakeet":
-            # For Parakeet models, we use the model ID directly
-            self.local_model_path_prepared = self.selected_asr_model
-            self._log_status(f"Parakeet model will be used directly: {self.selected_asr_model}", "grey")
+            # For Parakeet models, prefer prepared local path if available
+            self.local_model_path_prepared = self.local_model_path_prepared or self.selected_asr_model
+            self._log_status(f"Parakeet model will use: {self.local_model_path_prepared}", "grey")
 
     def update_selected_asr_model(self, new_model_id: str):
         """Update ASR model at runtime and prepare required resources."""
@@ -294,7 +336,14 @@ class TranscriptionHandler:
         
         # Reset model-specific resources
         self.parakeet_model = None
+        self.voxtral_model = None
         self.local_model_path_prepared = None
+
+        if self.model_type == "voxtral" and not MLX_AUDIO_AVAILABLE:
+            self._log_status(
+                "Voxtral model selected but mlx-audio is not installed. Install mlx-audio to enable Voxtral transcription.",
+                "red",
+            )
         
         # Respect light mode - avoid heavy loads and downloads
         if getattr(self, "_light_mode", False):
@@ -319,27 +368,42 @@ class TranscriptionHandler:
             return
 
         try:
+            ensured_path = None
+            if not getattr(self, "_light_mode", False):
+                ensured_path = self.ensure_model_assets(self.selected_asr_model)
+
             if self.model_type == "parakeet":
                 if PARAKEET_MLX_AVAILABLE:
-                    self._log_status(f"Loading Parakeet model: {self.selected_asr_model}", "grey")
-                    self.parakeet_model = parakeet_mlx.from_pretrained(self.selected_asr_model)
+                    load_target = ensured_path or self.selected_asr_model
+                    self._log_status(f"Loading Parakeet model: {load_target}", "grey")
+                    try:
+                        self.parakeet_model = parakeet_mlx.from_pretrained(load_target)
+                    except Exception:
+                        if load_target != self.selected_asr_model:
+                            self._log_status(
+                                "Direct path load failed, retrying with repository id…",
+                                "orange",
+                            )
+                            self.parakeet_model = parakeet_mlx.from_pretrained(self.selected_asr_model)
+                        else:
+                            raise
                     self._log_status("Parakeet model loaded successfully", "grey")
-                    # For Parakeet models, path is just the model id
-                    self.local_model_path_prepared = self.selected_asr_model
+                    # Track the prepared path (repo id if direct)
+                    self.local_model_path_prepared = load_target
                 else:
                     self._log_status("Parakeet library not available; cannot load model.", "red")
                     raise RuntimeError("Parakeet library not available")
             else:
-                # Whisper path handling
+                label = "Whisper" if self.model_type == "whisper" else "Voxtral"
                 self._log_status(
-                    f"Preparing local copy of Whisper model: {self.selected_asr_model}",
+                    f"Preparing local copy of {label} model: {self.selected_asr_model}",
                     "grey",
                 )
-                self.local_model_path_prepared = self._prepare_local_model_copy(
+                self.local_model_path_prepared = ensured_path or self._prepare_local_model_copy(
                     self.selected_asr_model
                 )
                 self._log_status(
-                    f"Local Whisper model prepared at: {self.local_model_path_prepared}",
+                    f"Local {label} model prepared at: {self.local_model_path_prepared}",
                     "grey",
                 )
         except Exception as e:
@@ -354,9 +418,11 @@ class TranscriptionHandler:
             model_id: The Hugging Face model ID
             
         Returns:
-            "whisper" or "parakeet"
+            "whisper", "parakeet", or "voxtral"
         """
         model_id_lower = model_id.lower()
+        if "voxtral" in model_id_lower:
+            return "voxtral"
         if "parakeet" in model_id_lower:
             # Check if parakeet_mlx is available, if not, fall back to whisper
             if not PARAKEET_MLX_AVAILABLE:
@@ -478,7 +544,6 @@ class TranscriptionHandler:
                             local_model_path = snapshot_download(
                                 repo_id=hf_repo_id,
                                 local_dir=target_dir,
-                                local_dir_use_symlinks=False,
                                 local_files_only=True,
                             )
                         except LocalEntryNotFoundError as inner_exc:
@@ -492,7 +557,6 @@ class TranscriptionHandler:
                             local_model_path = snapshot_download(
                                 repo_id=hf_repo_id,
                                 local_dir=target_dir,
-                                local_dir_use_symlinks=False,
                             )
                         except LocalEntryNotFoundError as inner_exc:
                             raise RuntimeError(
@@ -509,8 +573,136 @@ class TranscriptionHandler:
             )
             raise
 
+        # For Whisper models ensure the config.json contains the required dimensions.
+        if self._detect_model_type(hf_repo_id) == "whisper":
+            self._ensure_whisper_config_integrity(local_model_path, hf_repo_id)
+
         # Return the local model path without modifying config files
+        self._ensure_hf_offline_env()
         return local_model_path
+
+    def ensure_model_assets(self, model_id: str | None = None):
+        """Ensure model files are present locally, downloading if necessary."""
+        target_model = model_id or self.selected_asr_model
+        if not target_model:
+            raise ValueError("No model id provided to ensure_model_assets.")
+
+        self._log_status(f"Ensuring model assets for: {target_model}", "grey")
+
+        # Respect light mode to avoid heavy downloads
+        if getattr(self, "_light_mode", False):
+            self._log_status("CT_LIGHT_MODE enabled - skipping model preparation", "orange")
+            return None
+
+        # Prefer bundled assets if they already exist
+        bundled_path = self._get_local_model_dir(target_model)
+        if bundled_path:
+            self._log_status(f"Using bundled assets for {target_model}", "grey")
+            self._ensure_hf_offline_env()
+            return bundled_path
+
+        # Ensure huggingface_hub is available for downloads
+        if not HUGGINGFACE_HUB_AVAILABLE:
+            raise RuntimeError(
+                "huggingface_hub is not installed. Install huggingface-hub>=0.23.0 to download models."
+            )
+
+        # Temporarily disable offline mode so snapshot_download can reach Hugging Face
+        previous_offline = os.environ.get("HF_HUB_OFFLINE")
+        try:
+            os.environ["HF_HUB_OFFLINE"] = "0"
+            return self._prepare_local_model_copy(target_model, local_files_only=False)
+        finally:
+            if previous_offline is None:
+                os.environ.pop("HF_HUB_OFFLINE", None)
+            else:
+                os.environ["HF_HUB_OFFLINE"] = previous_offline
+
+    def _ensure_whisper_config_integrity(self, local_model_path: str, hf_repo_id: str) -> None:
+        """Validate whisper config.json and repair it if legacy downloads left it empty."""
+        config_path = os.path.join(local_model_path, "config.json")
+        required_keys = {
+            "n_mels",
+            "n_audio_ctx",
+            "n_audio_state",
+            "n_audio_head",
+            "n_audio_layer",
+            "n_vocab",
+            "n_text_ctx",
+            "n_text_state",
+            "n_text_head",
+            "n_text_layer",
+        }
+
+        if not os.path.isfile(config_path):
+            raise RuntimeError(
+                f"Whisper model at '{local_model_path}' is missing config.json. "
+                "Re-download the model or copy the config file manually."
+            )
+
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+        except json.JSONDecodeError as err:
+            self._log_status(
+                f"Whisper config.json unreadable ({err}). Attempting repair…",
+                "orange",
+            )
+            config_data = {}
+
+        if not isinstance(config_data, dict) or not required_keys.issubset(config_data.keys()):
+            self._log_status(
+                "Whisper config missing model dimensions. Attempting to repair from local Hugging Face cache…",
+                "orange",
+            )
+            if not self._repair_whisper_config_from_cache(hf_repo_id, config_path, required_keys):
+                raise RuntimeError(
+                    "Unable to repair whisper config.json automatically. "
+                    "Delete and re-download the model or copy the config from a known-good environment."
+                )
+
+    def _repair_whisper_config_from_cache(
+        self,
+        hf_repo_id: str,
+        target_config_path: str,
+        required_keys: set[str],
+    ) -> bool:
+        """Try to copy a valid config.json from the Hugging Face cache."""
+        cache_root = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+        repo_dir = f"models--{hf_repo_id.replace('/', '--')}"
+        search_root = os.path.join(cache_root, repo_dir)
+
+        if not os.path.isdir(search_root):
+            self._log_status(
+                f"No Hugging Face cache found for {hf_repo_id} at {search_root}",
+                "red",
+            )
+            return False
+
+        for root, _, files in os.walk(search_root):
+            if "config.json" not in files:
+                continue
+            candidate_path = os.path.join(root, "config.json")
+            try:
+                with open(candidate_path, "r", encoding="utf-8") as candidate:
+                    candidate_data = json.load(candidate)
+            except Exception:
+                continue
+            if isinstance(candidate_data, dict) and required_keys.issubset(candidate_data.keys()):
+                with open(target_config_path, "w", encoding="utf-8") as target:
+                    json.dump(candidate_data, target, indent=4)
+                    target.write("\n")
+                self._log_status(
+                    f"Repaired whisper config using cached copy from {candidate_path}",
+                    "green",
+                )
+                return True
+
+        self._log_status(
+            f"Failed to locate a valid config.json in Hugging Face cache for {hf_repo_id}",
+            "red",
+        )
+        return False
 
     def _save_temp_audio(self, audio_data) -> str:
         """Saves audio data to a temporary WAV file."""
@@ -591,7 +783,7 @@ class TranscriptionHandler:
 
         try:
             # Check if we're in CI mode (missing dependencies)
-            if not MLX_WHISPER_AVAILABLE and not PARAKEET_MLX_AVAILABLE:
+            if not MLX_WHISPER_AVAILABLE and not PARAKEET_MLX_AVAILABLE and not MLX_AUDIO_AVAILABLE:
                 self._log_status("Transcription mocked - no ASR libraries available (CI environment)", "orange")
                 raw_text = "[MOCK TRANSCRIPTION] Test transcription result"
                 transcription_time = 0.1  # Mock fast transcription
@@ -615,7 +807,31 @@ class TranscriptionHandler:
             # 3. Perform transcription based on model type
             start_time = time.time()
             
-            if self.model_type == "parakeet":
+            if self.model_type == "voxtral":
+                self._log_status(f"Using Voxtral (mlx-audio) for transcription with model: {self.selected_asr_model}", "blue")
+                if not MLX_AUDIO_AVAILABLE:
+                    error_msg = "Voxtral transcription failed - mlx-audio library not installed. Please run: pip install mlx-audio"
+                    self._log_status(error_msg, "red")
+                    raise RuntimeError(error_msg)
+
+                if self.voxtral_model is None:
+                    model_target = self.local_model_path_prepared or self.selected_asr_model
+                    try:
+                        self.voxtral_model = mlx_audio_generate.load_model(model_target)
+                    except Exception as model_err:
+                        self._log_status(f"Failed to load Voxtral model: {model_err}", "red")
+                        raise
+
+                generation_stream = getattr(mlx_audio_generate, "generation_stream", False)
+                result = self.voxtral_model.generate(
+                    filename,
+                    verbose=False,
+                    generation_stream=generation_stream,
+                    language="en",
+                )
+                raw_text = getattr(result, "text", "").strip() if result is not None else ""
+                
+            elif self.model_type == "parakeet":
                 self._log_status(f"Using Parakeet-MLX for transcription with model: {self.selected_asr_model}", "blue")
                 
                 if not PARAKEET_MLX_AVAILABLE or self.parakeet_model is None:

@@ -73,8 +73,7 @@ class TestDictationWorkflow(unittest.TestCase):
         
         wake_word_scenarios = [
             {"word": "note", "mode": "dictate", "expected_state": "dictation"},
-            {"word": "proof", "mode": "proofread", "expected_state": "dictation"},
-            {"word": "letter", "mode": "letter", "expected_state": "dictation"},
+            {"word": "dictate", "mode": "dictate", "expected_state": "dictation"},
         ]
         
         for scenario in wake_word_scenarios:
@@ -129,7 +128,7 @@ class TestDictationWorkflow(unittest.TestCase):
         self.assertTrue(dictation_state["programActive"])
         self.assertTrue(dictation_state["isDictating"])
         self.assertTrue(dictation_state["canDictate"])
-        self.assertIn(dictation_state["currentMode"], ["dictate", "proofread", "letter"])
+        self.assertEqual(dictation_state["currentMode"], "dictate")
         
         # Test expected status message
         expected_status = ("Dictating... (speak clearly)", "green")
@@ -200,20 +199,6 @@ class TestDictationWorkflow(unittest.TestCase):
                 "transcription": "The patient reports headache symptoms.",
                 "expected_clipboard": "The patient reports headache symptoms. ",
                 "expected_action": "paste_immediately"
-            },
-            {
-                "mode": "proofread",
-                "transcription": "patient has headache symptoms",
-                "processed_text": "The patient has headache symptoms.",
-                "expected_clipboard": "The patient has headache symptoms.",
-                "expected_action": "show_proofing_window"
-            },
-            {
-                "mode": "letter",
-                "transcription": "hope you are feeling better",
-                "processed_text": "I hope you are feeling better.",
-                "expected_clipboard": "I hope you are feeling better.",
-                "expected_action": "show_proofing_window"
             }
         ]
         
@@ -235,13 +220,8 @@ class TestDictationWorkflow(unittest.TestCase):
                 # Validate clipboard content
                 self.assertEqual(self.clipboard_content, expected_clipboard)
                 
-                # Validate mode-specific behavior
-                if mode == "dictate":
-                    # Direct paste with space
-                    self.assertTrue(expected_clipboard.endswith(" "))
-                elif mode in ["proofread", "letter"]:
-                    # Processed text, no trailing space
-                    self.assertFalse(expected_clipboard.endswith(" "))
+                # Dictation output should include trailing space for smooth continuation
+                self.assertTrue(expected_clipboard.endswith(" "))
                 
                 print(f"✅ {mode} clipboard integration validated")
         

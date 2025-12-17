@@ -15,9 +15,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Send toggle always on top request to main process
   toggleAlwaysOnTop: (forceState) => ipcRenderer.send('toggle-always-on-top', forceState), // forceState can be true, false, or undefined (to toggle)
 
-  // Control proofing window pinned state
-  setProofingPinned: (forceState) => ipcRenderer.send('set-proofing-pinned', forceState),
-
   // Send stop dictation request (process audio) to main process
   stopDictation: () => ipcRenderer.send('stop-dictation'),
 
@@ -27,14 +24,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Send tray state to main process for icon update
   sendTrayState: (state) => ipcRenderer.send('set-tray-state', state),
 
-  // Show/hide proofing window
-  showProofingWindow: (show) => ipcRenderer.send('show-proofing-window', show),
+  // Toggle wake word listening preference
+  setWakeWordEnabled: (enabled) => ipcRenderer.send('set-wake-word-enabled', enabled),
 
   // Send resize window request to main process
   resizeWindow: (data) => ipcRenderer.send('resize-window', data),
 
-  // Send pasted text to backend for proof formatting
-  proofPaste: (payload) => ipcRenderer.invoke('proof-paste', payload),
+  // Call vocabulary API commands (e.g., learn corrections)
+  vocabularyApi: (command, data = {}) => ipcRenderer.invoke('vocabulary-api', command, data),
 
   // Clean up listeners when they are no longer needed (important!)
   removeListener: (channel) => ipcRenderer.removeAllListeners(channel),

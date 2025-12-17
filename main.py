@@ -5,7 +5,10 @@ import threading
 import json  # For potential structured communication over stdin/stdout
 import time
 import subprocess
-from typing import Optional
+import io
+import wave
+import uuid
+from typing import Any, Dict, Optional
 
 # Make Quartz imports conditional for CI compatibility
 try:
@@ -64,12 +67,19 @@ except ImportError:
     
     keyboard = MockKeyboard()
 
+# Optional numpy import for audio serialization
+try:
+    import numpy as np  # type: ignore
+    NUMPY_AVAILABLE = True
+except ImportError:
+    NUMPY_AVAILABLE = False
+    np = None  # type: ignore
+
 # Import refactored modules and config
 from src.config import config
 from src.utils.utils import log_text
 from src.audio.audio_handler import AudioHandler
 from src.transcription_handler import TranscriptionHandler
-from src.llm.llm_handler import LLMHandler
 from src.hotkey_manager import HotkeyManager
 from src.memory_monitor import (
     MemoryMonitor,
@@ -94,6 +104,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = config.TOKENIZERS_PARALLELISM
 # Import settings manager and text processor
 from src.config.settings_manager import settings_manager
 from src.text_processor import text_processor
+from src.history.history_manager import HistoryManager
 
 def _sanitize_for_legacy_clipboards(text: str) -> str:
     """Replace non-breaking hyphens, non-breaking spaces, smart quotes, and narrow no-break spaces.
@@ -167,40 +178,13 @@ class Application:
 
     def __init__(self):
         self._program_active = True  # Overall state
-        self._current_processing_mode = (
-            None  # 'dictate', 'proofread', 'letter' - set when dictation starts
-        )
-        self._last_raw_transcription = (
-            ""  # Store last raw text for proof/letter actions
-        )
-        self._current_prompt = None  # Store prompt for proofread/letter commands
-        self._is_proofing_active = (
-            False  # Tracks if LLM proofing/letter generation is active
-        )
+        self._current_processing_mode: Optional[str] = None  # Tracks dictation state
+        self._last_raw_transcription = ""  # Store last raw text for clipboard
+        self._current_dictation_started_at: Optional[float] = None
+        self._pending_audio_bytes: Optional[bytes] = None
+        self.history_manager = HistoryManager()
 
         # --- Initialize Handlers ---
-        self.llm_handler = LLMHandler(
-            on_processing_complete_callback=self._handle_llm_complete,
-            on_status_update_callback=self._handle_status_update,
-            on_proofing_activity_callback=self._set_proofing_active_state,  # New callback
-        )
-        
-        # Initialize LLM Handler with saved model settings
-        saved_proofing_model = settings_manager.get_setting("selectedProofingModel", config.DEFAULT_LLM)
-        saved_letter_model = settings_manager.get_setting("selectedLetterModel", config.DEFAULT_LLM)
-        saved_proofing_prompt = settings_manager.get_setting("proofingPrompt", config.DEFAULT_PROOFREAD_PROMPT)
-        saved_letter_prompt = settings_manager.get_setting("letterPrompt", config.DEFAULT_LETTER_PROMPT)
-        
-        # Configure LLM with saved settings
-        self.llm_handler.update_selected_models(saved_proofing_model, saved_letter_model)
-        self.llm_handler.update_prompts(saved_proofing_prompt, saved_letter_prompt)
-        log_text("INIT", f"LLM configured with saved settings - Proofing: {saved_proofing_model}, Letter: {saved_letter_model}")
-        # Also surface a concise one-liner to stdout about selected models
-        try:
-            print(f"MODELS:proof='{saved_proofing_model}' letter='{saved_letter_model}'", flush=True)
-        except Exception:
-            pass
-        
         # Initialize TranscriptionHandler with saved ASR model, coalescing to default if empty/invalid
         saved_asr_model = settings_manager.get_setting("selectedAsrModel", config.DEFAULT_ASR_MODEL)
         if not saved_asr_model:
@@ -215,6 +199,12 @@ class Application:
             on_speech_end_callback=self._handle_speech_end,
             on_status_update_callback=self._handle_status_update,
         )
+        self.audio_handler.set_auto_silence_stop_enabled(
+            settings_manager.get_setting("autoStopOnSilence", True)
+        )
+        self.audio_handler.set_wake_word_enabled(
+            settings_manager.get_setting("wakeWordEnabled", True)
+        )
         self.hotkey_manager = HotkeyManager(
             on_hotkey_callback=self._handle_hotkey,
             on_status_update_callback=self._handle_status_update,
@@ -222,39 +212,6 @@ class Application:
 
         # --- Initial Setup ---
         self._handle_status_update("Application initializing...", "grey")
-        # Optional background preload of the selected proofing model (disabled by default)
-        preload_env = os.getenv("CT_PRELOAD_LLM", "0").strip().lower()
-        preload_enabled = preload_env in ("1", "true", "yes", "on")
-        if preload_enabled:
-            # Preload the currently selected proofing model (not the config default) to avoid cold start
-            preload_target_id = saved_proofing_model
-            preload_key = next(
-                (key for key, value in config.AVAILABLE_LLMS.items() if value == preload_target_id),
-                None,
-            )
-            if preload_key:
-                log_text(
-                    "INIT", f"Starting background preload for selected proofing LLM: {preload_key}"
-                )
-
-                def on_preload_complete(success):
-                    if success:
-                        log_text(
-                            "INIT",
-                            f"Selected LLM '{preload_key}' loaded successfully in background.",
-                        )
-                    else:
-                        log_text(
-                            "INIT_ERROR",
-                            f"Background preload failed for LLM: {preload_key}",
-                        )
-                        self._handle_status_update(
-                            f"Error loading selected LLM: {preload_key}", "red"
-                        )
-
-                threading.Thread(
-                    target=self.llm_handler.load_model, args=(preload_key, on_preload_complete), daemon=True
-                ).start()
 
     def start_backend(self):
         """Starts the application's background processes (Hotkeys only initially)."""
@@ -270,6 +227,7 @@ class Application:
             "isProofingActive": False,
             "canDictate": False,
             "currentMode": None,
+            "wakeWordEnabled": settings_manager.get_setting("wakeWordEnabled", True),
         }
         print(f"STATE:{json.dumps(initial_state_data)}", flush=True)
         
@@ -343,7 +301,7 @@ class Application:
             if hasattr(self.audio_handler, "_p") and self.audio_handler._p:
                 self.audio_handler.terminate_pyaudio()
 
-            # Add any other cleanup needed for LLMHandler, TranscriptionHandler if necessary
+            # Add any other cleanup needed for TranscriptionHandler if necessary
 
         except Exception as e:
             log_text("SHUTDOWN_ERROR", f"Error during shutdown: {e}")
@@ -399,13 +357,7 @@ class Application:
         if command == config.COMMAND_START_DICTATE:
             self._current_processing_mode = "dictate"
             self._handle_status_update("Dictation started.", "green")
-        elif command == config.COMMAND_START_PROOFREAD:  # Corrected indentation
-            self._current_processing_mode = "proofread"
-            self._handle_status_update("Dictation started (Proofread mode).", "green")
-            self._current_prompt = ""  # Set prompt to empty string for proofread
-        elif command == config.COMMAND_START_LETTER:
-            self._current_processing_mode = "letter"
-            self._handle_status_update("Dictation started (Letter mode).", "green")
+            self._current_dictation_started_at = time.time()
         else:
             log_text("WAKE_WORD", f"Unknown command from wake word: {command}")
             self.audio_handler.set_listening_state(
@@ -435,6 +387,8 @@ class Application:
         self._handle_status_update("Speech ended. Transcribing...", "orange")
         self._update_app_state()  # Update state to processing
 
+        self._pending_audio_bytes = self._convert_audio_to_wav(audio_data)
+
         # Ensure the transcription handler uses the up-to-date selected ASR model
         # (If runtime changes happened via CONFIG, model resources are already prepared)
         self.transcription_handler.transcribe_audio_data(
@@ -462,99 +416,78 @@ class Application:
                     f"Filler words removed. Original: '{raw_text.strip()}' -> Processed: '{processed_text}'",
                 )
         
-        self._current_transcript = (
-            processed_text  # Store for potential proofing
-        )
-        
         self._last_raw_transcription = processed_text  # Store processed text
+
+        history_metadata = {
+            "model": getattr(self.transcription_handler, "selected_asr_model", None),
+            "filterFillerWords": settings_manager.get_setting("filterFillerWords", True)
+        }
+        history_entry_id = uuid.uuid4().hex
+        history_record = self.history_manager.add_entry(
+            entry_id=history_entry_id,
+            transcript=raw_text or "",
+            processed_transcript=processed_text or "",
+            duration_seconds=duration,
+            audio_bytes=self._pending_audio_bytes,
+            started_at=self._current_dictation_started_at,
+            completed_at=time.time(),
+            metadata=history_metadata
+        )
+        self._pending_audio_bytes = None
+        self._current_dictation_started_at = None
+        print(f"HISTORY_ENTRY:{json.dumps(history_record, ensure_ascii=False)}", flush=True)
 
         # Send transcription to Electron
         if processed_text:
             print(f"FINAL_TRANSCRIPT:{processed_text}", flush=True)
-            
-            # Handle different processing modes
-            if self._current_processing_mode == "dictate":
-                # For dictate mode, copy to clipboard and send to Citrix, then finish
-                self._handle_status_update("Sending to Citrix...", "blue")
-                send_text_to_citrix(processed_text + " ")  # Add space
-                log_text("TRANSCRIPTION_COMPLETE", "Text sent to Citrix via clipboard.")
-                
-                # Reset state and return to listening for dictate mode
-                self._handle_status_update("Transcription complete.", "green")
-                self._current_processing_mode = None
-                self.hotkey_manager.set_dictating_state(False)
-                self.audio_handler.set_listening_state("activation")
-                self._update_app_state()
-                
-            elif self._current_processing_mode == "proofread":
-                # For proofread mode, start LLM processing (don't finish yet)
-                self._handle_status_update("Starting proofreading with LLM...", "orange")
-                # Always call process_text; it will load the model on demand if needed
-                prompt = self._current_prompt or settings_manager.get_setting('proofingPrompt', 'Proofread and improve this text:')
-                # Print full dictation preview (no truncation). Escape newlines to keep a single IPC line.
-                preview = processed_text.replace("\n", "\\n").replace("\r", "\\r")
-                print(f"DICTATION_PREVIEW:{preview}", flush=True)
-                self.llm_handler.process_text(processed_text, "proofread", prompt)
-                    
-            elif self._current_processing_mode == "letter":
-                # For letter mode, start LLM processing (don't finish yet)
-                self._handle_status_update("Formatting as letter with LLM...", "orange")
-                # Always call process_text; it will load the model on demand if needed
-                prompt = self._current_prompt or settings_manager.get_setting('letterPrompt', 'Format this as a professional letter:')
-                self.llm_handler.process_text(processed_text, "letter", prompt)
-            else:
-                # Unknown mode or None - just finish
-                self._handle_status_update("Transcription complete.", "green")
-                self._current_processing_mode = None
-                self.hotkey_manager.set_dictating_state(False)
-                self.audio_handler.set_listening_state("activation")
-                self._update_app_state()
+            self._handle_status_update("Sending to Citrix...", "blue")
+            send_text_to_citrix(processed_text + " ")  # Add space for easier continuation
+            log_text("TRANSCRIPTION_COMPLETE", "Text sent to Citrix via clipboard.")
+            self._handle_status_update("Transcription complete.", "green")
         else:
             # Empty transcription - always finish
             self._handle_status_update("Transcription returned empty.", "orange")
-            self._current_processing_mode = None
-            self.hotkey_manager.set_dictating_state(False)
-            self.audio_handler.set_listening_state("activation")
-            self._update_app_state()
 
-    def _handle_llm_complete(
-        self, processed_text: str, original_text: str, mode: str, duration: float
-    ):
-        """Called by LLMHandler when proofreading/letter generation is done."""
-        log_text(
-            "LLM_COMPLETE",
-            f"Mode: {mode}, Duration: {duration:.2f}s, Processed: {processed_text[:100]}...",
-        )
-
-        # Send processed text to Electron
-        if processed_text.startswith("Error:"):
-            # Handle error case - just log and update status, don't send to Citrix
-            self._handle_status_update(f"LLM Error ({mode}): {processed_text}", "red")
-            log_text("LLM_ERROR", f"LLM processing failed: {processed_text}")
-            # Send the error back to Electron for display
-            print(
-                f"TRANSCRIPTION:ERROR:{processed_text}", flush=True
-            )  # Use a distinct prefix for errors
-        else:
-            # Handle success case
-            log_prefix = "PROOFED" if mode == "proofread" else "LETTER"
-            print(f"TRANSCRIPTION:{log_prefix}:{processed_text}", flush=True)
-            self._handle_status_update(
-                f"LLM processing complete ({mode}). Sending to Citrix...", "blue"
-            )
-            send_text_to_citrix(processed_text + " ")  # Add space
-            log_text(
-                "LLM_COMPLETE", "Call to send_text_to_citrix completed."
-            )  # Added log
-
-        # Reset streaming callback after proofing
-        if mode == "proofread" and hasattr(self.llm_handler, "on_processing_stream"):
-            self.llm_handler.on_processing_stream = None
-        # Reset state and go back to listening (always do this)
+        # Reset state and return to listening
         self._current_processing_mode = None
-        self.hotkey_manager.set_dictating_state(False)  # <<< SET STATE TO FALSE
+        self.hotkey_manager.set_dictating_state(False)
         self.audio_handler.set_listening_state("activation")
         self._update_app_state()
+
+    def _convert_audio_to_wav(self, audio_data):
+        if audio_data is None:
+            return None
+
+        pcm_bytes = None
+        try:
+            if NUMPY_AVAILABLE and np is not None and isinstance(audio_data, np.ndarray):
+                pcm_bytes = audio_data.astype(np.int16, copy=False).tobytes()
+        except Exception:
+            pcm_bytes = None
+
+        if pcm_bytes is None:
+            try:
+                if hasattr(audio_data, "tobytes"):
+                    pcm_bytes = audio_data.tobytes()
+                elif isinstance(audio_data, (bytes, bytearray)):
+                    pcm_bytes = bytes(audio_data)
+            except Exception:
+                pcm_bytes = None
+
+        if not pcm_bytes:
+            return None
+
+        buffer = io.BytesIO()
+        try:
+            with wave.open(buffer, "wb") as wav_file:
+                wav_file.setnchannels(config.CHANNELS)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(config.SAMPLE_RATE)
+                wav_file.writeframes(pcm_bytes)
+        except Exception:
+            return None
+
+        return buffer.getvalue()
 
     def _handle_hotkey(self, command: str):
         """Called by HotkeyManager when a hotkey is pressed."""
@@ -588,11 +521,7 @@ class Application:
 
         # Check current audio state before starting new dictation
         current_audio_state = self.audio_handler.get_listening_state()
-        if command in [
-            config.COMMAND_START_DICTATE,
-            config.COMMAND_START_PROOFREAD,
-            config.COMMAND_START_LETTER,
-        ]:
+        if command == config.COMMAND_START_DICTATE:
             log_text("HOTKEY", f"Checking audio state for command: {command}")
             if current_audio_state == "dictation":
                 self._handle_status_update(
@@ -638,72 +567,6 @@ class Application:
 
     # --- Command Handling Methods (Triggered by stdin) ---
 
-    def _trigger_model_change(self, model_key: str):
-        """Handles model change command from Electron."""
-        log_text("COMMAND", f"Model change requested: {model_key}")
-        self._handle_status_update(f"Loading model: {model_key}...", "orange")
-        # Load in background thread
-        threading.Thread(
-            target=self.llm_handler.load_model, args=(model_key,), daemon=True
-        ).start()
-
-    def _trigger_proofread(self, text: str, prompt: Optional[str]):
-        """Handles proofread command from Electron."""
-        log_text("COMMAND", "Proofread command received.")
-        cleaned_text = text.strip() if isinstance(text, str) else ""
-        if not cleaned_text:
-            self._handle_status_update("Proofread Error: No text provided.", "red")
-            return
-
-        listening_state = self.audio_handler.get_listening_state()
-        if listening_state != "activation":
-            self._handle_status_update(
-                "Proofread Error: Cannot proofread while dictating or processing.",
-                "orange",
-            )
-            return
-
-        if self.llm_handler._model is None:
-            self._handle_status_update("Loading proofing model…", "orange")
-
-        self._current_processing_mode = "proofread"
-        self._current_prompt = prompt
-        self._current_transcript = cleaned_text
-        self._last_raw_transcription = cleaned_text
-
-        preview = cleaned_text.replace("\n", "\\n").replace("\r", "\\r")
-        print(f"DICTATION_PREVIEW:{preview}", flush=True)
-
-        self._handle_status_update("Starting proofreading with LLM...", "orange")
-        self._update_app_state()
-        self.llm_handler.process_text(cleaned_text, "proofread", prompt)
-
-    def _trigger_letter(self, text: str, prompt: str):
-        """Handles letter command from Electron."""
-        log_text("COMMAND", "Letter command received.")
-        if not text:
-            self._handle_status_update("Letter Error: No text provided.", "red")
-            return
-        if self.llm_handler._model is None:
-            self._handle_status_update("Letter Error: LLM is not loaded.", "red")
-            return
-        if self.audio_handler.get_listening_state() != "activation":
-            self._handle_status_update(
-                "Letter Error: Cannot format as letter while dictating or processing.",
-                "orange",
-            )
-            return
-
-        self._handle_status_update("Processing with LLM (letter mode)...", "orange")
-        self._current_processing_mode = "letter"  # Set mode for LLM callback
-        self._current_prompt = prompt  # Store prompt for LLM handler
-        self.llm_handler.process_text(text, "letter", prompt)
-
-    # Compare functionality remains unimplemented
-    def _trigger_compare(self, text: str, prompt: str):
-        log_text("COMMAND", "Compare command received (Not Implemented).")
-        self._handle_status_update("Compare feature not implemented.", "orange")
-
     def _trigger_stop_dictation(self):
         """Handles stop dictation command (process audio) from Electron or hotkey."""
         log_text("COMMAND", "Stop Dictation (Process) requested.")
@@ -743,6 +606,8 @@ class Application:
         log_text("COMMAND", "Abort Dictation (Discard) requested.")
         self.audio_handler.abort_dictation()  # Call the new method in AudioHandler
         self.hotkey_manager.set_dictating_state(False)  # <<< SET STATE TO FALSE
+        self._pending_audio_bytes = None
+        self._current_dictation_started_at = None
         self._update_app_state()  # Update state after aborting
 
     def _trigger_restart(self):
@@ -759,26 +624,6 @@ class Application:
             print(f"ERROR: Failed to restart application: {e}", flush=True)
             # Attempt to exit normally if exec fails
             sys.exit(1)
-
-    def _set_proofing_active_state(self, is_active: bool):
-        """Updates the proofing active state and notifies Electron."""
-        log_text_detail = getattr(config, "log_text_detail_level", 0) >= 2
-        if log_text_detail:
-            log_text(
-                "APP_STATE_DEBUG",
-                f"Attempting to set proofing active state to: {is_active}. Current: {self._is_proofing_active}",
-            )
-        if self._is_proofing_active != is_active:
-            self._is_proofing_active = is_active
-            log_text(
-                "APP_STATE_PROOFING", f"Proofing activity state changed to: {is_active}"
-            )
-            self._update_app_state()  # Send updated state to Electron
-        elif log_text_detail:
-            log_text(
-                "APP_STATE_DEBUG",
-                f"Proofing active state already {is_active}. No change needed.",
-            )
 
     def _send_hotkeys_info(self):
         """Sends hotkey information to Electron."""
@@ -854,15 +699,16 @@ class Application:
         is_dictating = audio_state == "dictation"
         # Use the AudioHandler's program active state since it knows if microphone is available
         audio_handler_active = self.audio_handler._program_active
-        can_dictate = audio_handler_active and audio_state == "activation"
+        wake_word_enabled = self.audio_handler.is_wake_word_enabled()
+        can_dictate = audio_handler_active and audio_state == "activation" and wake_word_enabled
 
         state_data = {
             "programActive": audio_handler_active,  # Use AudioHandler's state instead of self._program_active
             "audioState": audio_state,  # "activation", "dictation", "processing"
             "isDictating": is_dictating,
-            "isProofingActive": self._is_proofing_active,  # Added new state
             "canDictate": can_dictate,
-            "currentMode": self._current_processing_mode,  # 'dictate', 'proofread', 'letter', or None
+            "currentMode": self._current_processing_mode,  # 'dictate' or None
+            "wakeWordEnabled": wake_word_enabled,
         }
         print(f"STATE:{json.dumps(state_data)}", flush=True)
 
@@ -871,15 +717,14 @@ class Application:
             status_text = "Microphone not available (Hotkeys still work)"
             status_color = "orange"
         elif audio_state == "activation":
-            status_text = "Listening for activation words..."
-            status_color = "blue"
+            if wake_word_enabled:
+                status_text = "Listening for activation words..."
+                status_color = "blue"
+            else:
+                status_text = "Wake word detection off (use shortcuts or manual start)"
+                status_color = "grey"
         elif audio_state == "dictation":
-            mode_info = (
-                f" ({self._current_processing_mode} mode)"
-                if self._current_processing_mode
-                else ""
-            )
-            status_text = f"Listening for dictation...{mode_info}"
+            status_text = "Listening for dictation..."
             status_color = "green"
         elif audio_state == "processing":
             status_text = "Processing audio..."
@@ -947,46 +792,15 @@ if __name__ == "__main__":
                             "CONFIG_WARN", "Wake words not found in received config."
                         )
 
-                    if (
-                        "proofingPrompt" in received_config
-                        and "letterPrompt" in received_config
-                    ):
-                        app.llm_handler.update_prompts(
-                            received_config["proofingPrompt"],
-                            received_config["letterPrompt"],
-                        )
-                        # Save prompts to persistent settings
-                        settings_manager.set_setting("proofingPrompt", received_config["proofingPrompt"], save=False)
-                        settings_manager.set_setting("letterPrompt", received_config["letterPrompt"], save=False)
-                    else:
-                        log_text("CONFIG_WARN", "Prompts not found in received config.")
-
-                    if (
-                        "selectedProofingModel" in received_config
-                        and "selectedLetterModel" in received_config
-                    ):
-                        app.llm_handler.update_selected_models(
-                            received_config["selectedProofingModel"],
-                            received_config["selectedLetterModel"],
-                        )
-                        # Save model selections to persistent settings
-                        settings_manager.set_setting("selectedProofingModel", received_config["selectedProofingModel"], save=False)
-                        settings_manager.set_setting("selectedLetterModel", received_config["selectedLetterModel"], save=False)
-                    else:
-                        log_text(
-                            "CONFIG_WARN",
-                            "Selected models not found in received config.",
-                        )
-
-                    # Handle selected ASR model from config
                     if "selectedAsrModel" in received_config:
                         try:
                             app.transcription_handler.update_selected_asr_model(
                                 received_config["selectedAsrModel"]
                             )
-                            # Save ASR model selection to persistent settings
                             settings_manager.set_setting(
-                                "selectedAsrModel", received_config["selectedAsrModel"], save=False
+                                "selectedAsrModel",
+                                received_config["selectedAsrModel"],
+                                save=False,
                             )
                             log_text(
                                 "CONFIG",
@@ -999,16 +813,23 @@ if __name__ == "__main__":
                             "CONFIG_WARN",
                             "selectedAsrModel not found in received config.",
                         )
-                        
-                    # Handle filler word filtering settings
-                    if "filterFillerWords" in received_config:
-                        text_processor.set_filter_enabled(received_config["filterFillerWords"])
-                        log_text("CONFIG", f"Filler word filtering set to: {received_config['filterFillerWords']}")
-                        
+
                     if "fillerWords" in received_config:
                         text_processor.set_filler_words(received_config["fillerWords"])
                         log_text("CONFIG", f"Filler words updated: {received_config['fillerWords']}")
-                    
+
+                    if "autoStopOnSilence" in received_config:
+                        auto_stop = bool(received_config["autoStopOnSilence"])
+                        settings_manager.set_setting("autoStopOnSilence", auto_stop, save=False)
+                        app.audio_handler.set_auto_silence_stop_enabled(auto_stop)
+                        log_text("CONFIG", f"Auto-stop on silence set to {auto_stop}")
+
+                    if "wakeWordEnabled" in received_config:
+                        wake_word_enabled = bool(received_config["wakeWordEnabled"])
+                        settings_manager.set_setting("wakeWordEnabled", wake_word_enabled, save=False)
+                        app.audio_handler.set_wake_word_enabled(wake_word_enabled)
+                        log_text("CONFIG", f"Wake word listening enabled: {wake_word_enabled}")
+
                     # Save all settings to file
                     settings_manager.save_settings()
                     # --- End direct updates ---
@@ -1021,46 +842,6 @@ if __name__ == "__main__":
                 except json.JSONDecodeError as e:
                     log_text("CONFIG_ERROR", f"JSON decode error on config: {e}")
                     app._handle_status_update(f"Config JSON error: {e}", "red")
-
-            # --- MODEL LIST HANDLING ---
-            elif command_line == "MODELS_REQUEST":  # Match command sent by Electron
-                log_text(
-                    "STARTUP_TRACE", "Received GET_MODELS command."
-                )  # Updated TRACE
-                log_text(
-                    "STARTUP_TRACE",
-                    "Calling app.llm_handler.get_available_models_for_electron()...",
-                )  # ADDED TRACE
-                models_list_data = app.llm_handler.get_available_models_for_electron()
-                log_text(
-                    "STARTUP_TRACE", f"Got models list data: {models_list_data}"
-                )  # ADDED TRACE
-                log_text("STARTUP_TRACE", "Calling json.dumps()...")  # ADDED TRACE
-                models_json = json.dumps(models_list_data)
-                log_text(
-                    "STARTUP_TRACE", f"JSON created: {models_json[:100]}..."
-                )  # ADDED TRACE
-                log_text(
-                    "STARTUP_TRACE", "Printing MODELS_LIST to stdout..."
-                )  # Corrected TRACE message
-                print(f"MODELS_LIST:{models_json}", flush=True)  # Corrected prefix
-                sys.stdout.flush()  # Explicit flush
-                log_text(
-                    "STARTUP_TRACE", f"Sent MODELS_LIST list."
-                )  # Corrected TRACE message
-
-            elif command_line.startswith("PASTE_PROOF:"):
-                payload_str = command_line[len("PASTE_PROOF:") :]
-                try:
-                    payload = json.loads(payload_str)
-                    text = payload.get("text", "")
-                    prompt = payload.get("prompt")
-                    if not isinstance(prompt, str) or not prompt.strip():
-                        prompt = None
-                    app._trigger_proofread(text, prompt)
-                except json.JSONDecodeError as e:
-                    log_text("COMMAND_ERROR", f"Invalid PASTE_PROOF payload: {e}")
-                    app._handle_status_update("Proofread Error: Invalid text payload.", "red")
 
             elif command_line == "STOP_DICTATION":
                 app._trigger_stop_dictation()
@@ -1129,12 +910,36 @@ if __name__ == "__main__":
                         print(error_response, flush=True)
                         sys.stdout.flush()
 
+            elif command_line.startswith("ENSURE_MODEL:"):
+                parts = command_line.split(":", 2)
+                if len(parts) < 3:
+                    log_text("COMMAND_ERROR", f"Invalid ENSURE_MODEL command: {command_line}")
+                    continue
+                request_id = parts[1]
+                repo_id = parts[2]
+                try:
+                    local_path = app.transcription_handler.ensure_model_assets(repo_id)
+                    response = {
+                        "success": True,
+                        "modelId": repo_id,
+                        "localPath": local_path,
+                        "message": "Model assets ready."
+                    }
+                    print(f"MODEL_READY:{request_id}:{json.dumps(response)}", flush=True)
+                    sys.stdout.flush()
+                    log_text("COMMAND", f"Model assets ensured for {repo_id}")
+                except Exception as ensure_err:
+                    error_payload = {
+                        "success": False,
+                        "modelId": repo_id,
+                        "error": str(ensure_err)
+                    }
+                    print(f"MODEL_ERROR:{request_id}:{json.dumps(error_payload)}", flush=True)
+                    sys.stdout.flush()
+                    log_text("COMMAND_ERROR", f"Failed to ensure model {repo_id}: {ensure_err}")
+
             elif command_line == "start_dictate":
                 app._handle_hotkey(config.COMMAND_START_DICTATE)
-            elif command_line == "start_proofread":
-                app._handle_hotkey(config.COMMAND_START_PROOFREAD)
-            elif command_line == "start_letter":
-                app._handle_hotkey(config.COMMAND_START_LETTER)
 
             elif command_line == "SHUTDOWN":
                 log_text("COMMAND", "Shutdown command received from Electron.")

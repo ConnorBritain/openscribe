@@ -147,7 +147,7 @@ python run_all_tests.py           # Run all tests with summary
 ## Verification Results
 
 ### System Status (Post-Testing)
-- Current ASR Model: `mlx-community/parakeet-tdt-0.6b-v2`
+- Current ASR Model: `mlx-community/parakeet-tdt-0.6b-v2` (v3 option available)
 - Filler Filtering: Enabled
 - Filler Words: 7 configured (`["um", "uh", "ah", "er", "hmm", "mm", "mhm"]`)
 - System Status: ✅ Ready for use

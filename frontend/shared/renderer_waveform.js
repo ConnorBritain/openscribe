@@ -1,59 +1,116 @@
 // renderer_waveform.js
 // Handles waveform drawing and canvas manipulation
 
-import { amplitudes, canvas, canvasCtx } from './renderer_ui.js';
+import { amplitudes } from './renderer_ui.js';
 import { currentAudioState } from './renderer_state.js';
 
 let isAnimationRunning = false;
+let loggedReady = false;
+let loggedMissing = false;
 
-export function clearCanvas() {
-  canvasCtx.clearRect(0, 0, canvas.width, canvas.height);
+function getRenderContext() {
+  const canvas = document.getElementById('waveform-canvas');
+  if (!canvas) {
+    if (!loggedMissing) {
+      console.warn('[Waveform] Canvas element not found yet.');
+      loggedMissing = true;
+    }
+    return null;
+  }
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    if (!loggedMissing) {
+      console.warn('[Waveform] Canvas context unavailable.');
+      loggedMissing = true;
+    }
+    return null;
+  }
+  if (!loggedReady) {
+    console.log('[Waveform] Canvas context ready.');
+    loggedReady = true;
+    loggedMissing = false;
+  }
+  return { canvas, ctx };
 }
 
-export function drawFlatLine() {
-  canvasCtx.fillStyle = '#444';
-  canvasCtx.fillRect(0, canvas.height / 2 - 1, canvas.width, 2);
+function clearCanvas(ctx, canvas) {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
 
-export function drawWaveformBars() {
+function paintBackground(ctx, canvas) {
+  const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
+  gradient.addColorStop(0, '#111722');
+  gradient.addColorStop(1, '#0b0f16');
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+function drawWaveformBars(ctx, canvas) {
   const width = canvas.width;
   const height = canvas.height;
   const barWidth = width / amplitudes.length;
-  const maxBarHeight = height * 0.95; // Use more of the canvas height
-  canvasCtx.fillStyle = '#6a6a6a';
+  const maxBarHeight = height * 0.95;
+  ctx.fillStyle = '#58a6ff';
+
   for (let i = 0; i < amplitudes.length; i++) {
     const amplitude = amplitudes[i];
-    // Much more aggressive scaling: divide by 30 instead of 100, with minimum visibility
-    const scaledAmplitude = Math.max(amplitude / 30, amplitude > 0 ? 0.1 : 0);
-    const barHeight = Math.max(2, scaledAmplitude * maxBarHeight);
+    const normalized = Math.min(Math.max(amplitude / 100, 0), 1);
+    const eased = Math.pow(normalized, 0.75); // brighten low levels
+    const barHeight = Math.max(2, eased * maxBarHeight);
     const x = i * barWidth;
     const y = (height - barHeight) / 2;
-    try {
-      canvasCtx.fillRect(x, y, barWidth - 1, barHeight);
-    } catch (e) {
-      // Ignore drawing errors
-    }
+    ctx.fillRect(x, y, Math.max(barWidth - 1, 1), barHeight);
   }
 }
 
-function animateWaveform() {
-  clearCanvas();
-  if (currentAudioState === 'inactive') {
-    drawFlatLine();
-  } else {
-    drawWaveformBars();
+function drawIdleDots(ctx, canvas) {
+  const width = canvas.width;
+  const height = canvas.height;
+  const midY = Math.round(height / 2);
+  const dotSpacing = Math.max(Math.floor(width / 40), 8);
+  const dotRadius = 2;
+  ctx.fillStyle = 'rgba(88, 166, 255, 0.45)';
+
+  for (let x = dotSpacing / 2; x < width; x += dotSpacing) {
+    ctx.beginPath();
+    ctx.arc(x, midY, dotRadius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function renderFrame() {
+  const context = getRenderContext();
+  if (!context) {
+    if (isAnimationRunning) {
+      requestAnimationFrame(renderFrame);
+    }
+    return;
   }
 
-  // Continue animation if still running
+  const { canvas, ctx } = context;
+  clearCanvas(ctx, canvas);
+  paintBackground(ctx, canvas);
+
+  if (currentAudioState === 'dictation') {
+    drawWaveformBars(ctx, canvas);
+  } else {
+    const hasLiveAmplitude = amplitudes.some((value) => value > 2);
+    if (hasLiveAmplitude) {
+      drawWaveformBars(ctx, canvas);
+    } else {
+      drawIdleDots(ctx, canvas);
+    }
+  }
+
   if (isAnimationRunning) {
-    requestAnimationFrame(animateWaveform);
+    requestAnimationFrame(renderFrame);
   }
 }
 
 export function startWaveformAnimation() {
   if (!isAnimationRunning) {
     isAnimationRunning = true;
-    animateWaveform();
+    requestAnimationFrame(renderFrame);
   }
 }
 
@@ -61,7 +118,6 @@ export function stopWaveformAnimation() {
   isAnimationRunning = false;
 }
 
-// Main function - starts the animation immediately
 export function drawWaveform() {
   startWaveformAnimation();
 }

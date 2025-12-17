@@ -3,18 +3,21 @@ console.log('Settings renderer script loaded.');
 // --- DOM Elements ---
 const sidebarLinks = {
     wakewords: document.getElementById('nav-wakewords'),
-    prompts: document.getElementById('nav-prompts'),
-    models: document.getElementById('nav-models'),
     asr: document.getElementById('nav-asr'),
     vocabulary: document.getElementById('nav-vocabulary'),
 };
 const sections = {
     wakewords: document.getElementById('section-wakewords'),
-    prompts: document.getElementById('section-prompts'),
-    models: document.getElementById('section-models'),
     asr: document.getElementById('section-asr'),
     vocabulary: document.getElementById('section-vocabulary'),
 };
+
+const ASR_MODELS = [
+    { id: 'mlx-community/whisper-large-v3-turbo', name: 'Whisper (large-v3-turbo) – Recommended' },
+    { id: 'mlx-community/parakeet-tdt-0.6b-v2', name: 'Parakeet-TDT-0.6B-v2 – Requires parakeet-mlx' },
+    { id: 'mlx-community/parakeet-tdt-0.6b-v3', name: 'Parakeet-TDT-0.6B-v3 – Latest MLX build' },
+    { id: 'mlx-community/Voxtral-Mini-3B-2507-bf16', name: 'Voxtral Mini 3B (bf16) – MLX Audio' }
+];
 
 // ASR Model Elements
 const asrModelSelect = document.getElementById('asr-model-select');
@@ -22,21 +25,12 @@ const saveAsrModelButton = document.getElementById('save-asr-model-button');
 const asrModelStatus = document.getElementById('asr-model-status');
 // Wake Words Elements (Updated)
 const wakeWordsDictateInput = document.getElementById('wake-words-dictate-input');
-const wakeWordsProofreadInput = document.getElementById('wake-words-proofread-input');
-const wakeWordsLetterInput = document.getElementById('wake-words-letter-input');
-const saveWakeWordsButton = document.getElementById('save-wake-words-button'); // Button ID remains the same
+const wakeWordEnabledToggle = document.getElementById('wake-word-enabled-toggle');
+const filterFillerToggle = document.getElementById('filter-filler-toggle');
+const fillerWordsInput = document.getElementById('filler-words-input');
+const autoStopToggle = document.getElementById('auto-stop-toggle');
+const saveDictationButton = document.getElementById('save-dictation-button');
 const wakeWordsStatus = document.getElementById('wake-words-status');
-// Prompts Elements
-const proofingPromptInput = document.getElementById('proofing-prompt-input');
-const letterPromptInput = document.getElementById('letter-prompt-input');
-const savePromptsButton = document.getElementById('save-prompts-button');
-const promptsStatus = document.getElementById('prompts-status');
-// Models Elements
-const proofingModelSelect = document.getElementById('proofing-model-select');
-const letterModelSelect = document.getElementById('letter-model-select');
-const saveModelsButton = document.getElementById('save-models-button');
-const modelsStatus = document.getElementById('models-status');
-
 // Vocabulary Elements
 const newTermCorrect = document.getElementById('new-term-correct');
 const newTermVariations = document.getElementById('new-term-variations');
@@ -75,106 +69,67 @@ Object.keys(sidebarLinks).forEach(key => {
 });
 
 // --- Model Population ---
-function populateModelDropdowns(models, savedSettings) {
-    // Also populate ASR dropdown if present
-    if (Array.isArray(models) && asrModelSelect) {
-        asrModelSelect.innerHTML = '';
-        // Only show models that are ASR-capable (filter by type or id)
-        // For now, hardcode curated ASR options for clarity
-        const asrModels = [
-            // Curated stable choices only
-            { id: 'mlx-community/whisper-large-v3-turbo', name: 'Whisper (large-v3-turbo) - Recommended' },
-            { id: 'mlx-community/parakeet-tdt-0.6b-v2', name: 'Parakeet-TDT-0.6B-v2 - Requires parakeet-mlx library' }
-            // Removed: Distil-Large v3 (init hangs) and Medical fine-tune (issues reported)
-        ];
-        asrModels.forEach(model => {
-            const option = document.createElement('option');
-            option.value = model.id;
-            option.textContent = model.name;
-            asrModelSelect.appendChild(option);
-        });
-        // Set selected value if present
-        if (savedSettings.selectedAsrModel) {
-            asrModelSelect.value = savedSettings.selectedAsrModel;
-        }
-    }
-
-    // Clear existing options (except the "Loading..." placeholder if needed)
-    proofingModelSelect.innerHTML = '';
-    letterModelSelect.innerHTML = '';
-
-    if (!models || models.length === 0) {
-        proofingModelSelect.innerHTML = '<option value="">No models available</option>';
-        letterModelSelect.innerHTML = '<option value="">No models available</option>';
+function populateAsrModelDropdown(selectedAsrModel) {
+    if (!asrModelSelect) {
         return;
     }
 
-    models.forEach(model => {
-        const optionProofing = document.createElement('option');
-        optionProofing.value = model.id;
-        optionProofing.textContent = model.name;
-        proofingModelSelect.appendChild(optionProofing);
-
-        const optionLetter = document.createElement('option');
-        optionLetter.value = model.id;
-        optionLetter.textContent = model.name;
-        letterModelSelect.appendChild(optionLetter);
+    asrModelSelect.innerHTML = '';
+    ASR_MODELS.forEach(model => {
+        const option = document.createElement('option');
+        option.value = model.id;
+        option.textContent = model.name;
+        asrModelSelect.appendChild(option);
     });
 
-    // Set selected value based on loaded settings
-    if (savedSettings.selectedProofingModel) {
-        proofingModelSelect.value = savedSettings.selectedProofingModel;
-    }
-    if (savedSettings.selectedLetterModel) {
-        letterModelSelect.value = savedSettings.selectedLetterModel;
+    const modelToSelect = selectedAsrModel || (ASR_MODELS.length > 0 ? ASR_MODELS[0].id : '');
+    if (modelToSelect) {
+        asrModelSelect.value = modelToSelect;
     }
 }
 
 
 // --- Load Settings ---
 async function loadAndPopulateSettings() {
-    // Also load ASR model selection
-    // (rest of function continues as before)
-    console.log('DEBUG: Settings DOM loaded. Requesting settings and models...');
+    console.log('DEBUG: Settings DOM loaded. Requesting settings...');
     try {
-        // Load settings and models in parallel
-        const [settings, availableModels] = await Promise.all([
-            window.settingsAPI.loadSettings(),
-            window.settingsAPI.getAvailableModels()
-        ]);
+        const settings = await window.settingsAPI.loadSettings();
 
         console.log('DEBUG: Settings loaded from main:', settings);
-        console.log('DEBUG: Available models loaded from main:', availableModels);
 
-        // Populate Wake Words (Updated for object structure)
+        // Populate wake words
         if (settings.wakeWords && typeof settings.wakeWords === 'object') {
             wakeWordsDictateInput.value = (settings.wakeWords.dictate || []).join(', ');
-            wakeWordsProofreadInput.value = (settings.wakeWords.proofread || []).join(', ');
-            wakeWordsLetterInput.value = (settings.wakeWords.letter || []).join(', ');
         } else {
-             // Handle case where saved data might be in old array format or missing
-             console.warn("Wake words setting is not in the expected object format. Resetting fields.");
-             wakeWordsDictateInput.value = '';
-             wakeWordsProofreadInput.value = '';
-             wakeWordsLetterInput.value = '';
+            console.warn('Wake words setting missing or invalid. Resetting to defaults.');
+            wakeWordsDictateInput.value = '';
+        }
+        if (wakeWordEnabledToggle) {
+            wakeWordEnabledToggle.checked = settings.wakeWordEnabled !== false;
         }
 
-        // Populate Prompts
-        if (settings.proofingPrompt) {
-            proofingPromptInput.value = settings.proofingPrompt;
+        // Populate filler-word controls
+        if (filterFillerToggle) {
+            filterFillerToggle.checked = settings.filterFillerWords !== false;
         }
-        if (settings.letterPrompt) {
-            letterPromptInput.value = settings.letterPrompt;
+        if (fillerWordsInput) {
+            const fillerWords = Array.isArray(settings.fillerWords) && settings.fillerWords.length > 0
+                ? settings.fillerWords
+                : ['um', 'uh', 'ah', 'er', 'hmm', 'mm', 'mhm'];
+            fillerWordsInput.value = fillerWords.join(', ');
+        }
+        if (autoStopToggle) {
+            autoStopToggle.checked = settings.autoStopOnSilence !== false;
         }
 
-        // Populate Models section
-        populateModelDropdowns(availableModels, settings);
-
+        // Populate ASR model dropdown
+        populateAsrModelDropdown(settings.selectedAsrModel);
     } catch (error) {
-        console.error('ERROR: Error loading settings or models:', error);
-        modelsStatus.textContent = 'Error loading models!';
-        modelsStatus.style.color = 'red';
-        // Display error to user?
+        console.error('ERROR: Error loading settings:', error);
+        if (wakeWordsStatus) {
+            wakeWordsStatus.textContent = 'Error loading settings. Please retry.';
+            wakeWordsStatus.style.color = 'red';
+        }
     }
 }
 
@@ -182,12 +137,41 @@ async function loadAndPopulateSettings() {
 
 // Save ASR Model
 if (saveAsrModelButton) {
-    saveAsrModelButton.addEventListener('click', () => {
+    saveAsrModelButton.addEventListener('click', async () => {
+        if (!asrModelSelect) {
+            return;
+        }
         const selectedAsrModel = asrModelSelect.value;
-        window.settingsAPI.saveSettings({ selectedAsrModel });
-        asrModelStatus.textContent = 'ASR model saved!';
-        asrModelStatus.style.color = 'green';
-        setTimeout(() => { asrModelStatus.textContent = ''; }, 3000);
+        if (!selectedAsrModel) {
+            asrModelStatus.textContent = 'Select an ASR model first.';
+            asrModelStatus.style.color = 'red';
+            return;
+        }
+
+        try {
+            saveAsrModelButton.disabled = true;
+            asrModelSelect.disabled = true;
+            asrModelStatus.textContent = 'Preparing model assets…';
+            asrModelStatus.style.color = '#ffb400';
+
+            const ensureResult = await window.settingsAPI.ensureModel(selectedAsrModel);
+            if (!ensureResult || ensureResult.success === false) {
+                const errorMessage = ensureResult?.error || 'Model preparation failed.';
+                throw new Error(errorMessage);
+            }
+
+            window.settingsAPI.saveSettings({ selectedAsrModel });
+            asrModelStatus.textContent = 'ASR model downloaded and saved!';
+            asrModelStatus.style.color = 'green';
+            setTimeout(() => { asrModelStatus.textContent = ''; }, 3500);
+        } catch (error) {
+            console.error('Failed to prepare ASR model', error);
+            asrModelStatus.textContent = `Model setup failed: ${error?.message || error}`;
+            asrModelStatus.style.color = 'red';
+        } finally {
+            saveAsrModelButton.disabled = false;
+            asrModelSelect.disabled = false;
+        }
     });
 }
 
@@ -198,49 +182,28 @@ const parseWakeWords = (inputString) => {
                       .filter(word => word.length > 0);
 };
 
-// Save Wake Words (Updated for separate inputs)
-saveWakeWordsButton.addEventListener('click', () => {
-    const wakeWordsData = {
-        dictate: parseWakeWords(wakeWordsDictateInput.value),
-        proofread: parseWakeWords(wakeWordsProofreadInput.value),
-        letter: parseWakeWords(wakeWordsLetterInput.value)
-    };
+if (saveDictationButton) {
+    saveDictationButton.addEventListener('click', () => {
+        const wakeWordsData = {
+            dictate: parseWakeWords(wakeWordsDictateInput.value)
+        };
 
-    console.log('DEBUG: Saving wake words object:', wakeWordsData);
-    window.settingsAPI.saveSettings({ wakeWords: wakeWordsData }); // Send the structured object
-    wakeWordsStatus.textContent = 'Wake words saved!';
-    setTimeout(() => { wakeWordsStatus.textContent = ''; }, 3000); // Clear status after 3s
-});
+        const fillerWords = parseWakeWords(fillerWordsInput.value);
+        const payload = {
+            wakeWords: wakeWordsData,
+            filterFillerWords: !!filterFillerToggle.checked,
+            fillerWords,
+            autoStopOnSilence: autoStopToggle ? !!autoStopToggle.checked : true,
+            wakeWordEnabled: wakeWordEnabledToggle ? !!wakeWordEnabledToggle.checked : true
+        };
 
-// Save Prompts
-savePromptsButton.addEventListener('click', () => {
-    const proofingPrompt = proofingPromptInput.value;
-    const letterPrompt = letterPromptInput.value;
-
-    console.log('DEBUG: Saving prompts:', { proofingPrompt, letterPrompt });
-    window.settingsAPI.saveSettings({
-        proofingPrompt: proofingPrompt,
-        letterPrompt: letterPrompt
+        console.log('DEBUG: Saving dictation settings:', payload);
+        window.settingsAPI.saveSettings(payload);
+        wakeWordsStatus.textContent = 'Dictation settings saved!';
+        wakeWordsStatus.style.color = 'green';
+        setTimeout(() => { wakeWordsStatus.textContent = ''; }, 3000);
     });
-    promptsStatus.textContent = 'Prompts saved!';
-    setTimeout(() => { promptsStatus.textContent = ''; }, 3000); // Clear status after 3s
-});
-
-// Save Models
-saveModelsButton.addEventListener('click', () => {
-    const selectedProofingModel = proofingModelSelect.value;
-    const selectedLetterModel = letterModelSelect.value;
-
-    console.log('DEBUG: Saving model selection:', { selectedProofingModel, selectedLetterModel });
-    window.settingsAPI.saveSettings({
-        selectedProofingModel: selectedProofingModel,
-        selectedLetterModel: selectedLetterModel
-    });
-    modelsStatus.textContent = 'Model selection saved!';
-     modelsStatus.style.color = 'green';
-    setTimeout(() => { modelsStatus.textContent = ''; }, 3000); // Clear status after 3s
-});
-
+}
 
 // --- Vocabulary Management ---
 let currentVocabularyTerms = [];

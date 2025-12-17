@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dictation History</title>
+  <link rel="stylesheet" href="./history.css">
+</head>
+<body>
+  <div id="history-app">
+    <aside id="history-sidebar">
+      <header class="sidebar-header">
+        <h1>History</h1>
+        <input id="history-search" type="search" placeholder="Search transcripts…" />
+      </header>
+      <div id="history-list" class="history-list">
+        <div class="empty-state">No history yet. Dictations will appear here.</div>
+      </div>
+    </aside>
+    <main id="history-detail">
+      <div id="history-detail-empty" class="detail-empty">
+        <h2>Select a dictation</h2>
+        <p>Choose an item on the left to review its transcript and playback audio.</p>
+      </div>
+      <div id="history-detail-content" class="detail-content hidden">
+        <header class="detail-header">
+          <div>
+            <h2 id="detail-title"></h2>
+            <p id="detail-meta"></p>
+          </div>
+          <div class="detail-actions">
+            <button id="detail-copy-button">Copy Text</button>
+            <button id="detail-delete-button" class="danger">Delete</button>
+          </div>
+        </header>
+        <p id="detail-feedback" class="detail-feedback"></p>
+        <section class="detail-audio" id="detail-audio-section">
+          <audio id="detail-audio-player" controls></audio>
+          <p id="detail-audio-hint" class="audio-hint"></p>
+        </section>
+        <section class="detail-transcript">
+          <div id="correction-toolbar" class="correction-toolbar hidden">
+            <div class="correction-selection">
+              <span id="correction-selection"></span>
+            </div>
+            <input id="correction-input" type="text" placeholder="What should this be?" />
+            <button id="correction-learn">Save correction</button>
+          </div>
+          <div id="detail-transcript" class="transcript-content" tabindex="0"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script type="module" src="./history_renderer.js"></script>
+</body>
+</html>

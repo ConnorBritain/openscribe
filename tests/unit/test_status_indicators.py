@@ -155,9 +155,7 @@ class TestStatusIndicators(unittest.TestCase):
         
         # Test wake word configurations
         wake_words = {
-            "dictate": ["note"],
-            "proofread": ["proof"], 
-            "letter": ["letter"]
+            "dictate": ["note", "dictate"],
         }
         
         # Test the flow for each wake word type
