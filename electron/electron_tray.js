@@ -1,8 +1,9 @@
 // electron_tray.js
 // Handles tray icon management and menu actions
 
-const { Tray, Menu, nativeImage, app } = require('electron');
+const { Tray, Menu, nativeImage, app, ipcMain } = require('electron');
 const path = require('path');
+const { store } = require('./electron_app_init');
 
 function getTrayIconPath(iconName) {
   // In packaged app, use app.getAppPath() to get the correct resource path
@@ -26,6 +27,62 @@ const trayIconPaths = {
 // Pre-load and cache all tray icons to prevent flashing
 let trayIcons = {};
 let tray = null;
+let trayContextDeps = null;
+
+function isWakeWordEnabled() {
+  return store.get('wakeWordEnabled', true) !== false;
+}
+
+function toggleWakeWordFromTray() {
+  const nextEnabled = !isWakeWordEnabled();
+  if (ipcMain.listenerCount('set-wake-word-enabled') === 0) {
+    console.error('[Tray] Wake word IPC handler not initialized.');
+    return;
+  }
+  ipcMain.emit('set-wake-word-enabled', null, nextEnabled);
+}
+
+function buildContextMenu() {
+  if (!trayContextDeps) {
+    return Menu.buildFromTemplate([]);
+  }
+
+  const wakeWordLabel = isWakeWordEnabled() ? 'Wake Word On' : 'Wake Word Off';
+  const quitApp = trayContextDeps.app || app;
+
+  return Menu.buildFromTemplate([
+    {
+      label: 'Start Dictation',
+      click: () => {
+        const { getPythonShell } = require('./electron_python');
+        const pythonShell = getPythonShell();
+        if (pythonShell) {
+          pythonShell.send('start_dictate');
+        } else {
+          console.error('Tray Menu Error: Python backend not running.');
+        }
+      }
+    },
+    {
+      label: wakeWordLabel,
+      click: toggleWakeWordFromTray
+    },
+    { label: 'Settings...', accelerator: 'CmdOrCtrl+,', click: trayContextDeps.createSettingsWindow },
+    { label: 'Vocabulary', click: () => trayContextDeps.createSettingsWindow('vocabulary') },
+    { label: 'History…', click: trayContextDeps.createHistoryWindow },
+    { type: 'separator' },
+    { label: 'Show Floating UI', click: () => { const win = trayContextDeps.getMainWindow ? trayContextDeps.getMainWindow() : null; if (win) win.show(); } },
+    { label: 'Quit Citrix Transcriber', accelerator: 'CmdOrCtrl+Q', click: () => { quitApp.quit(); } }
+  ]);
+}
+
+function refreshTrayMenu() {
+  if (!tray || !trayContextDeps) {
+    return;
+  }
+  const contextMenu = buildContextMenu();
+  tray.setContextMenu(contextMenu);
+}
 
 function preloadTrayIcons() {
   trayIcons = {
@@ -60,11 +117,18 @@ function setTrayIconByState(state) {
   }
 }
 
-function createTrayIcon(getMainWindow, createSettingsWindow, createHistoryWindow, app) {
+function createTrayIcon(getMainWindow, createSettingsWindow, createHistoryWindow, appInstance) {
   if (tray) {
     console.log('Tray icon already exists.');
     return;
   }
+
+  trayContextDeps = {
+    getMainWindow,
+    createSettingsWindow,
+    createHistoryWindow,
+    app: appInstance
+  };
 
   // Pre-load all tray icons to prevent flashing
   preloadTrayIcons();
@@ -84,27 +148,7 @@ function createTrayIcon(getMainWindow, createSettingsWindow, createHistoryWindow
   console.log('[Tray] Setting initial tray icon to grey (inactive state)');
   tray.setImage(trayIcons.grey);
 
-  const contextMenu = Menu.buildFromTemplate([
-    {
-      label: 'Start Dictation',
-      click: () => {
-        const { getPythonShell } = require('./electron_python');
-        const pythonShell = getPythonShell();
-        if (pythonShell) {
-          pythonShell.send('start_dictate');
-        } else {
-          console.error('Tray Menu Error: Python backend not running.');
-        }
-      }
-    },
-    { label: 'Settings...', accelerator: 'CmdOrCtrl+,', click: createSettingsWindow },
-    { label: 'Vocabulary', click: () => createSettingsWindow('vocabulary') },
-    { label: 'History…', click: createHistoryWindow },
-    { type: 'separator' },
-    { label: 'Show Floating UI', click: () => { const win = getMainWindow ? getMainWindow() : null; if (win) win.show(); } },
-    { label: 'Quit Citrix Transcriber', accelerator: 'CmdOrCtrl+Q', click: () => { app.quit(); } }
-  ]);
-  tray.setContextMenu(contextMenu);
+  refreshTrayMenu();
 }
 
-module.exports = { setTrayIconByState, createTrayIcon, tray };
+module.exports = { setTrayIconByState, createTrayIcon, refreshTrayMenu, tray };

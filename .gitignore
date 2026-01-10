@@ -295,3 +295,28 @@ tools/apple_speech_bench/tmp_*/
 # Temporary files
 .tmp/
 temp/
+
+# Additional PHI/Secrets Protection
+# API keys and credentials
+*.pem
+*.key
+*.crt
+.env.local
+.env.*.local
+secrets.json
+credentials.json
+*credentials*
+*api_key*
+*apikey*
+
+# PHI and patient data
+*patient*data*
+*PHI*
+*hx_*
+medical_records/
+clinical_notes/
+
+# Memory/conversation logs that may contain PHI
+memory_logs.jsonl
+*.memory.json
+conversation_*.json

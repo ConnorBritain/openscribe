@@ -11,6 +11,8 @@ struct Options {
     var chunkSeconds: Double
     var overlapSeconds: Double
     var perChunkTimeoutSeconds: Double
+    var punctuation: Bool
+    var contextPhrases: [String]
 }
 
 enum HelperError: Error, CustomStringConvertible {
@@ -28,7 +30,7 @@ func printUsage() {
     print(
         """
         Usage:
-          \(exe) --input-file PATH --output-json PATH [--done-file PATH] [--locale en-US] [--chunk-seconds 20] [--overlap-seconds 1.0] [--timeout-seconds 60]
+          \(exe) --input-file PATH --output-json PATH [--done-file PATH] [--locale en-US] [--chunk-seconds 20] [--overlap-seconds 1.0] [--timeout-seconds 60] [--punctuation 1] [--context-json PATH]
 
         Notes:
           - Forces on-device recognition (requiresOnDeviceRecognition = true).
@@ -48,6 +50,9 @@ func parseArgs() throws -> Options {
     var chunkSeconds = 20.0
     var overlapSeconds = 1.0
     var timeoutSeconds = 60.0
+    var punctuation = true
+    var contextJSON: URL?
+    var contextPhrases: [String] = []
 
     var i = 1
     while i < CommandLine.arguments.count {
@@ -84,6 +89,14 @@ func parseArgs() throws -> Options {
             guard i + 1 < CommandLine.arguments.count else { throw HelperError.message("Missing value for --timeout-seconds", code: "BAD_ARGS") }
             timeoutSeconds = Double(CommandLine.arguments[i + 1]) ?? timeoutSeconds
             i += 1
+        case "--punctuation":
+            guard i + 1 < CommandLine.arguments.count else { throw HelperError.message("Missing value for --punctuation", code: "BAD_ARGS") }
+            punctuation = (CommandLine.arguments[i + 1].trimmingCharacters(in: .whitespacesAndNewlines) != "0")
+            i += 1
+        case "--context-json":
+            guard i + 1 < CommandLine.arguments.count else { throw HelperError.message("Missing value for --context-json", code: "BAD_ARGS") }
+            contextJSON = URL(fileURLWithPath: CommandLine.arguments[i + 1], relativeTo: cwd).standardizedFileURL
+            i += 1
         default:
             throw HelperError.message("Unknown argument: \(arg)", code: "BAD_ARGS")
         }
@@ -101,6 +114,20 @@ func parseArgs() throws -> Options {
     if overlapSeconds >= chunkSeconds { overlapSeconds = max(0, chunkSeconds / 4.0) }
     if timeoutSeconds <= 0 { timeoutSeconds = 60.0 }
 
+    if let contextJSON {
+        do {
+            let data = try Data(contentsOf: contextJSON)
+            let obj = try JSONSerialization.jsonObject(with: data, options: [])
+            if let list = obj as? [String] {
+                contextPhrases = list
+            } else if let dict = obj as? [String: Any], let list = dict["phrases"] as? [String] {
+                contextPhrases = list
+            }
+        } catch {
+            throw HelperError.message("Failed to read context JSON: \(error)", code: "BAD_CONTEXT")
+        }
+    }
+
     return Options(
         inputFile: inputFile,
         outputJSON: outputJSON,
@@ -108,7 +135,9 @@ func parseArgs() throws -> Options {
         localeIdentifier: localeIdentifier,
         chunkSeconds: chunkSeconds,
         overlapSeconds: overlapSeconds,
-        perChunkTimeoutSeconds: timeoutSeconds
+        perChunkTimeoutSeconds: timeoutSeconds,
+        punctuation: punctuation,
+        contextPhrases: contextPhrases
     )
 }
 
@@ -182,11 +211,23 @@ func longestOverlapSuffixPrefix(existing: [String], incoming: [String], maxCheck
 func transcribeChunkOnDevice(
     recognizer: SFSpeechRecognizer,
     url: URL,
-    timeoutSeconds: Double
+    timeoutSeconds: Double,
+    punctuation: Bool,
+    contextPhrases: [String]
 ) throws -> String {
     let request = SFSpeechURLRecognitionRequest(url: url)
     request.shouldReportPartialResults = false
     request.requiresOnDeviceRecognition = true
+    request.taskHint = .dictation
+    if punctuation {
+        // `addsPunctuation` is not available on all OS versions/SDKs. Use KVC safely.
+        if request.responds(to: NSSelectorFromString("setAddsPunctuation:")) {
+            request.setValue(true, forKey: "addsPunctuation")
+        }
+    }
+    if !contextPhrases.isEmpty {
+        request.contextualStrings = contextPhrases
+    }
 
     let sem = DispatchSemaphore(value: 0)
     var bestText: String?
@@ -221,7 +262,9 @@ func chunkedTranscribe(
     inputFile: URL,
     chunkSeconds: Double,
     overlapSeconds: Double,
-    perChunkTimeoutSeconds: Double
+    perChunkTimeoutSeconds: Double,
+    punctuation: Bool,
+    contextPhrases: [String]
 ) throws -> (text: String, chunks: Int) {
     let audioFile = try AVAudioFile(forReading: inputFile)
     let format = audioFile.processingFormat
@@ -273,7 +316,9 @@ func chunkedTranscribe(
         let chunkTextPretty = try transcribeChunkOnDevice(
             recognizer: recognizer,
             url: tempURL,
-            timeoutSeconds: perChunkTimeoutSeconds
+            timeoutSeconds: perChunkTimeoutSeconds,
+            punctuation: punctuation,
+            contextPhrases: contextPhrases
         )
 
         let incomingNorm = normalizeWords(chunkTextPretty)
@@ -338,7 +383,9 @@ final class HelperAppDelegate: NSObject, NSApplicationDelegate {
                 inputFile: options.inputFile,
                 chunkSeconds: options.chunkSeconds,
                 overlapSeconds: options.overlapSeconds,
-                perChunkTimeoutSeconds: options.perChunkTimeoutSeconds
+                perChunkTimeoutSeconds: options.perChunkTimeoutSeconds,
+                punctuation: options.punctuation,
+                contextPhrases: options.contextPhrases
             )
             let processingSeconds = Date().timeIntervalSince(start)
 

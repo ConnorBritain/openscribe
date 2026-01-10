@@ -106,6 +106,16 @@ DEFAULT_WHISPER_PROMPT = (
     "Use appropriate terminology when needed."
 )
 
+# --- MLX Whisper Decoding ---
+# Override MLX Whisper transcribe settings to reduce trailing hallucinations.
+# Values map directly to mlx_whisper.transcribe kwargs.
+MLX_WHISPER_TRANSCRIBE_OPTIONS = {
+    "temperature": 0.0,
+    "condition_on_previous_text": False,
+}
+# Additional decode options for mlx_whisper.DecodingOptions (optional).
+MLX_WHISPER_DECODE_OPTIONS = {}
+
 # --- Hotkeys ---
 # Define commands associated with hotkeys
 COMMAND_TOGGLE_ACTIVE = "toggle_active"

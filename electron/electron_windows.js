@@ -24,6 +24,7 @@ function createWindow() {
     frame: false,
     transparent: false, // Temporarily disable transparency for debugging
     resizable: true,
+    icon: path.join(__dirname, '../assets/app-icon.png'),
     webPreferences: {
       preload: path.join(__dirname, '../frontend/main/preload.js'),
       contextIsolation: true,
@@ -94,6 +95,7 @@ function createSettingsWindow(section = null) {
     width: 800,
     height: 600,
     title: 'Citrix Transcriber Settings',
+    icon: path.join(__dirname, '../assets/app-icon.png'),
     webPreferences: {
       preload: path.join(__dirname, '../frontend/settings/settings_preload.js'), // Assuming a settings_preload.js for settings IPC
       contextIsolation: true,
@@ -128,6 +130,7 @@ function createHistoryWindow() {
     width: 960,
     height: 640,
     title: 'Dictation History',
+    icon: path.join(__dirname, '../assets/app-icon.png'),
     minWidth: 720,
     minHeight: 480,
     webPreferences: {

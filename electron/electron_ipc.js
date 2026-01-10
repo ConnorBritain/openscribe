@@ -2,7 +2,7 @@
 // Handles IPC handlers for renderer-main process communication
 
 const { ipcMain } = require('electron');
-const { setTrayIconByState } = require('./electron_tray');
+const { setTrayIconByState, refreshTrayMenu } = require('./electron_tray');
 const { store } = require('./electron_app_init'); // For accessing electron-store
 const { getPythonShell } = require('./electron_python');
 const historyService = require('./history_service');
@@ -43,6 +43,7 @@ function initializeIpcHandlers() {
     const enabledBool = !!enabled;
     console.log('[IPC] set-wake-word-enabled received:', enabledBool);
     store.set('wakeWordEnabled', enabledBool);
+    refreshTrayMenu();
 
     try {
       const pythonShell = getPythonShell();
@@ -79,6 +80,7 @@ function initializeIpcHandlers() {
       }
       if (typeof settings.wakeWordEnabled === 'boolean') {
         store.set('wakeWordEnabled', settings.wakeWordEnabled);
+        refreshTrayMenu();
       }
       // Save ASR model selection
       if (settings.selectedAsrModel) {

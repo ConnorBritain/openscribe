@@ -765,6 +765,25 @@ class TranscriptionHandler:
                     f"Error deleting temporary audio file {filename}: {e}", "orange"
                 )
 
+    def _build_mlx_whisper_kwargs(self, prompt: str, model_path_or_repo: str) -> dict:
+        kwargs = {
+            "language": "en",
+            "fp16": False,
+            "path_or_hf_repo": model_path_or_repo,
+        }
+        if prompt:
+            kwargs["initial_prompt"] = prompt
+
+        transcribe_overrides = getattr(config, "MLX_WHISPER_TRANSCRIBE_OPTIONS", {})
+        if isinstance(transcribe_overrides, dict):
+            kwargs.update({k: v for k, v in transcribe_overrides.items() if v is not None})
+
+        decode_overrides = getattr(config, "MLX_WHISPER_DECODE_OPTIONS", {})
+        if isinstance(decode_overrides, dict):
+            kwargs.update({k: v for k, v in decode_overrides.items() if v is not None})
+
+        return kwargs
+
     def transcribe_audio_data(
         self, audio_data, prompt: str = config.DEFAULT_WHISPER_PROMPT
     ):
@@ -837,13 +856,11 @@ class TranscriptionHandler:
                     )
                     if not MLX_WHISPER_AVAILABLE:
                         raise
-                    result = mlx_whisper.transcribe(
-                        filename,
-                        language="en",
-                        fp16=False,
-                        prompt=prompt,
-                        path_or_hf_repo=config.DEFAULT_ASR_MODEL,
+                    apple_fallback_kwargs = self._build_mlx_whisper_kwargs(
+                        prompt,
+                        config.DEFAULT_ASR_MODEL,
                     )
+                    result = mlx_whisper.transcribe(filename, **apple_fallback_kwargs)
                     raw_text = (result.get("text", "") or "").strip()
 
             elif self.model_type == "voxtral":
@@ -925,13 +942,11 @@ class TranscriptionHandler:
                                         "grey",
                                     )
                                 # Use mlx_whisper for transcription
-                                result = mlx_whisper.transcribe(
-                                    filename,
-                                    language="en",
-                                    fp16=False,
-                                    prompt=prompt,
-                                    path_or_hf_repo=model_path_or_repo,
+                                whisper_kwargs = self._build_mlx_whisper_kwargs(
+                                    prompt,
+                                    model_path_or_repo,
                                 )
+                                result = mlx_whisper.transcribe(filename, **whisper_kwargs)
                                 raw_text = result.get("text", "").strip()
                                 break
                             except Exception as whisper_error:
