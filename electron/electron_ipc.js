@@ -4,7 +4,7 @@
 const { ipcMain } = require('electron');
 const { setTrayIconByState, refreshTrayMenu } = require('./electron_tray');
 const { store } = require('./electron_app_init'); // For accessing electron-store
-const { getPythonShell } = require('./electron_python');
+const { getPythonShell, getActualAvailableLLMs } = require('./electron_python');
 const historyService = require('./history_service');
 
 function initializeIpcHandlers() {
@@ -132,7 +132,8 @@ function initializeIpcHandlers() {
       filterFillerWords: store.get('filterFillerWords', true),
       fillerWords: store.get('fillerWords', []),
       autoStopOnSilence: store.get('autoStopOnSilence', true),
-      wakeWordEnabled: store.get('wakeWordEnabled', true)
+      wakeWordEnabled: store.get('wakeWordEnabled', true),
+      availableModels: getActualAvailableLLMs() || []
     };
     console.log('[IPC] load-settings: returning', settings);
     return settings;
@@ -213,6 +214,47 @@ function initializeIpcHandlers() {
     } catch (error) {
       console.error('[IPC] history:delete failed:', error);
       return { success: false, error: error?.message || 'Failed to delete history entry.' };
+    }
+  });
+
+  ipcMain.handle('history:retranscribe', async (_event, entryId, modelId) => {
+    console.log(`[IPC] history:retranscribe received: ${entryId} -> ${modelId}`);
+    try {
+      const pythonShell = getPythonShell();
+      if (!pythonShell || !pythonShell.send) {
+        return { success: false, error: 'Python backend not available' };
+      }
+
+      return new Promise((resolve) => {
+        const requestId = `retrans_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+        const responseHandler = (message) => {
+          if (message.startsWith(`RETRANSCRIBE_RESULT:${requestId}:`)) {
+            pythonShell.removeListener('message', responseHandler);
+            try {
+              const response = JSON.parse(message.split(`RETRANSCRIBE_RESULT:${requestId}:`)[1]);
+              resolve(response);
+            } catch (error) {
+              console.error('[IPC] Error parsing re-transcribe response:', error);
+              resolve({ success: false, error: 'Invalid response format' });
+            }
+          }
+        };
+
+        pythonShell.on('message', responseHandler);
+
+        // Command format: RETRANSCRIBE_AUDIO:<requestId>:<entryId>:<modelId>
+        pythonShell.send(`RETRANSCRIBE_AUDIO:${requestId}:${entryId}:${modelId}`);
+
+        // Set longer timeout for model loading + transcription (5 minutes)
+        setTimeout(() => {
+          pythonShell.removeListener('message', responseHandler);
+          resolve({ success: false, error: 'Re-transcription timed out' });
+        }, 300000);
+      });
+    } catch (error) {
+      console.error('[IPC] history:retranscribe error:', error);
+      return { success: false, error: error.message };
     }
   });
 

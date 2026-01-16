@@ -258,3 +258,114 @@ body {
 #correction-learn:hover {
   background: rgba(88, 166, 255, 0.4);
 }
+
+/* Comparison UI Styles */
+
+.compare-controls {
+  padding: 10px 20px;
+  background: rgba(88, 166, 255, 0.08);
+  border-bottom: 1px solid rgba(88, 166, 255, 0.2);
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.compare-controls.hidden {
+  display: none;
+}
+
+.compare-selector {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+}
+
+.compare-selector label {
+  font-size: 13px;
+  color: #cde2ff;
+  white-space: nowrap;
+}
+
+.compare-selector select {
+  flex: 1;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #17202b;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: white;
+  font-size: 13px;
+}
+
+.text-button {
+  background: transparent;
+  border: none;
+  color: #8cc4ff;
+  cursor: pointer;
+  font-size: 13px;
+  text-decoration: underline;
+}
+
+.text-button:hover {
+  color: #cde2ff;
+}
+
+/* Comparison View Layout */
+
+.comparison-view {
+  display: flex;
+  height: 500px; /* Adjust height as needed */
+  gap: 0;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-top: 15px;
+}
+
+.comparison-view.hidden {
+  display: none;
+}
+
+.comparison-column {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0; /* Ensures resizing works correctly */
+}
+
+.comparison-column h4 {
+  margin: 0;
+  padding: 10px 15px;
+  background: rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 14px;
+  font-weight: 500;
+  color: #cde2ff;
+}
+
+.comparison-column .transcript-content {
+  flex: 1;
+  border: none;
+  border-radius: 0;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.comparison-divider {
+  width: 1px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* Helper to hide main transcript when comparing */
+.transcript-content.hidden-for-compare {
+  display: none;
+}
+
+.secondary {
+    background: rgba(255, 255, 255, 0.1);
+    color: #e0e6ed;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+.secondary:hover {
+    background: rgba(255, 255, 255, 0.15);
+}

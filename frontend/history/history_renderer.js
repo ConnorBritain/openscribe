@@ -16,6 +16,16 @@ const correctionButton = document.getElementById('correction-learn');
 const deleteButton = document.getElementById('detail-delete-button');
 const detailFeedback = document.getElementById('detail-feedback');
 
+// Comparison UI Elements
+const compareButton = document.getElementById('detail-compare-button');
+const compareControls = document.getElementById('compare-controls');
+const compareModelSelect = document.getElementById('compare-model-select');
+const compareCancelButton = document.getElementById('compare-cancel-button');
+const comparisonView = document.getElementById('comparison-view');
+const comparisonOriginalText = document.getElementById('comparison-original-text');
+const comparisonNewText = document.getElementById('comparison-new-text');
+const comparisonNewTitle = document.getElementById('comparison-new-title');
+
 let historyEntries = [];
 let filteredEntries = [];
 let selectedEntryId = null;
@@ -137,12 +147,19 @@ function renderDetail(entry) {
   const transcriptText = entry.processedTranscript || entry.transcript || '';
   transcriptContainer.textContent = transcriptText;
 
+  // Reset comparison view
+  compareControls.classList.add('hidden');
+  comparisonView.classList.add('hidden');
+  transcriptContainer.classList.remove('hidden-for-compare');
+
   if (entry.audioFileUrl) {
     audioSection.classList.remove('hidden');
+    compareButton.classList.remove('hidden');
     audioPlayer.src = entry.audioFileUrl;
     audioHint.textContent = '';
   } else {
     audioSection.classList.add('hidden');
+    compareButton.classList.add('hidden');
     audioPlayer.removeAttribute('src');
     audioPlayer.load();
   }
@@ -300,6 +317,110 @@ deleteButton?.addEventListener('click', async () => {
     deleteButton.disabled = false;
   }
 });
+
+// Comparison Feature Logic
+
+async function loadModels() {
+  try {
+    const models = await window.historyAPI.getAsrModels();
+
+    // Save current selection if any
+    const currentVal = compareModelSelect.value;
+
+    compareModelSelect.innerHTML = '<option value="" disabled selected>Select model to compare...</option>';
+
+    let modelEntries = [];
+    if (Array.isArray(models)) {
+      // If array of strings or objects
+      modelEntries = models.map(m => typeof m === 'string' ? { id: m, name: m } : m);
+    } else if (models && typeof models === 'object') {
+      // Config dict: { "Friendly Name": "model_id" }
+      modelEntries = Object.entries(models).map(([name, id]) => ({ id, name }));
+    }
+
+    modelEntries.forEach(model => {
+      const option = document.createElement('option');
+      option.value = model.id;
+      option.textContent = model.name;
+      compareModelSelect.appendChild(option);
+    });
+
+    if (currentVal) {
+      compareModelSelect.value = currentVal;
+    }
+  } catch (e) {
+    console.error('Failed to load models:', e);
+  }
+}
+
+function showComparisonControls() {
+  compareControls.classList.remove('hidden');
+  compareButton.classList.add('hidden'); // Hide the button while comparing
+  loadModels();
+}
+
+function cancelComparison() {
+  compareControls.classList.add('hidden');
+  comparisonView.classList.add('hidden');
+  transcriptContainer.classList.remove('hidden-for-compare');
+  compareButton.classList.remove('hidden');
+  compareModelSelect.value = "";
+
+  if (detailFeedback) {
+    detailFeedback.textContent = '';
+    detailFeedback.style.color = '';
+  }
+}
+
+async function handleReTranscribe() {
+  const modelId = compareModelSelect.value;
+  if (!modelId || !selectedEntryId) return;
+
+  // UI Setup
+  comparisonView.classList.remove('hidden');
+  transcriptContainer.classList.add('hidden-for-compare');
+
+  // Show original text
+  const originalText = selectedEntry.processedTranscript || selectedEntry.transcript || '';
+  comparisonOriginalText.textContent = originalText;
+
+  // Show loading in new text
+  comparisonNewTitle.textContent = "Re-transcribing...";
+  comparisonNewText.innerHTML = '<div style="text-align:center; padding: 20px; color: #8cc4ff;"><i>Processing audio with new model...</i><br><small>This may take a moment to load the model.</small></div>';
+
+  if (detailFeedback) {
+    detailFeedback.textContent = `Re-transcribing with ${modelId}...`;
+    detailFeedback.style.color = '#8cc4ff';
+  }
+
+  try {
+    const result = await window.historyAPI.retranscribe(selectedEntryId, modelId);
+
+    if (result.success) {
+      comparisonNewTitle.textContent = `New Model (${result.duration}s)`;
+      comparisonNewText.textContent = result.transcript;
+      if (detailFeedback) detailFeedback.textContent = '';
+    } else {
+      comparisonNewText.textContent = `Error: ${result.error}`;
+      if (detailFeedback) {
+        detailFeedback.textContent = 'Re-transcription failed.';
+        detailFeedback.style.color = '#ff6b6b';
+      }
+    }
+  } catch (error) {
+    console.error('Re-transcription failed:', error);
+    comparisonNewText.textContent = `Error: ${error.message}`;
+    if (detailFeedback) {
+      detailFeedback.textContent = 'Re-transcription failed.';
+      detailFeedback.style.color = '#ff6b6b';
+    }
+  }
+}
+
+// Event Listeners for Comparison
+if (compareButton) compareButton.addEventListener('click', showComparisonControls);
+if (compareCancelButton) compareCancelButton.addEventListener('click', cancelComparison);
+if (compareModelSelect) compareModelSelect.addEventListener('change', handleReTranscribe);
 
 loadHistory().catch((error) => {
   console.error('Failed to load history', error);

@@ -95,6 +95,7 @@ AVAILABLE_ASR_MODELS = {
     "Parakeet-TDT-0.6B-v3": "mlx-community/parakeet-tdt-0.6b-v3",
     "Whisper (large-v3-turbo)": "mlx-community/whisper-large-v3-turbo",
     "Voxtral Mini 3B (bf16)": "mlx-community/Voxtral-Mini-3B-2507-bf16",
+    "MedASR (Medical)": "google/medasr",
     "Apple Speech (on-device, macOS)": "apple:speech:ondevice",
 }
 DEFAULT_ASR_MODEL = "mlx-community/whisper-large-v3-turbo"

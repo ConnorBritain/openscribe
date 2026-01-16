@@ -2,7 +2,7 @@
 pyaudio>=0.2.13
 webrtcvad>=2.0.10
 vosk==0.3.44
-numpy>=1.24.0
+numpy>=1.24.0,<2.3.0  # Pinned: numba (used by mlx-whisper) requires numpy <= 2.3
 phonetics>=1.0.5
 psutil>=5.9.0  # For memory monitoring
 pynput>=1.7.6  # For hotkey functionality
@@ -14,6 +14,11 @@ parakeet-mlx>=0.1.0  # For Parakeet transcription models
 # If installation fails, the app will fall back to Whisper models
 huggingface-hub>=0.23.0
 mlx-audio>=0.2.4  # For Voxtral MLX ASR models
+librosa>=0.10.0  # For MedASR audio loading
+
+# MedASR dependencies (for google/medasr model)
+transformers>=4.40.0  # For MedASR pipeline
+torch>=2.0.0  # Required by transformers for MedASR
 
 # Testing dependencies
 pytest>=7.0.0

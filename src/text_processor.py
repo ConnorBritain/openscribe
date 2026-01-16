@@ -42,7 +42,7 @@ class TextProcessor:
         Returns:
             Text with filler words removed
         """
-        if not text or not settings_manager.get_setting("filterFillerWords", False):
+        if not text or not settings_manager.get_setting("filterFillerWords", True):
             return text
         
         # Update filler words if settings changed
@@ -157,7 +157,7 @@ class TextProcessor:
     
     def is_filter_enabled(self) -> bool:
         """Check if filler word filtering is enabled."""
-        return settings_manager.get_setting("filterFillerWords", False)
+        return settings_manager.get_setting("filterFillerWords", True)
 
 
 # Global text processor instance

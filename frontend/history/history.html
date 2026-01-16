@@ -1,12 +1,15 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Dictation History</title>
   <link rel="stylesheet" href="./history.css">
 </head>
+
 <body>
   <div id="history-app">
     <aside id="history-sidebar">
@@ -31,9 +34,21 @@
           </div>
           <div class="detail-actions">
             <button id="detail-copy-button">Copy Text</button>
+            <button id="detail-compare-button" class="secondary">Compare ASR</button>
             <button id="detail-delete-button" class="danger">Delete</button>
           </div>
         </header>
+
+        <section id="compare-controls" class="compare-controls hidden">
+          <div class="compare-selector">
+            <label for="compare-model-select">Re-transcribe with:</label>
+            <select id="compare-model-select">
+              <option value="" disabled selected>Select model...</option>
+            </select>
+          </div>
+          <button id="compare-cancel-button" class="text-button">Cancel</button>
+        </section>
+
         <p id="detail-feedback" class="detail-feedback"></p>
         <section class="detail-audio" id="detail-audio-section">
           <audio id="detail-audio-player" controls></audio>
@@ -48,6 +63,18 @@
             <button id="correction-learn">Save correction</button>
           </div>
           <div id="detail-transcript" class="transcript-content" tabindex="0"></div>
+
+          <div id="comparison-view" class="comparison-view hidden">
+            <div class="comparison-column">
+              <h4>Original</h4>
+              <div id="comparison-original-text" class="transcript-content"></div>
+            </div>
+            <div class="comparison-divider"></div>
+            <div class="comparison-column">
+              <h4 id="comparison-new-title">New Model</h4>
+              <div id="comparison-new-text" class="transcript-content"></div>
+            </div>
+          </div>
         </section>
       </div>
     </main>
@@ -55,4 +82,5 @@
 
   <script type="module" src="./history_renderer.js"></script>
 </body>
+
 </html>

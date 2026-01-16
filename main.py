@@ -968,6 +968,72 @@ if __name__ == "__main__":
             elif command_line == "start_dictate":
                 app._handle_hotkey(config.COMMAND_START_DICTATE)
 
+            elif command_line == "MODELS_REQUEST":
+                # Send available models list to Electron
+                models_payload = json.dumps(config.AVAILABLE_ASR_MODELS)
+                print(f"MODELS_LIST:{models_payload}", flush=True)
+                sys.stdout.flush()
+                log_text("COMMAND", "Sent MODELS_LIST to Electron")
+
+            elif command_line.startswith("RETRANSCRIBE_AUDIO:"):
+                # Handle re-transcription request: RETRANSCRIBE_AUDIO:<requestId>:<entryId>:<modelId>
+                try:
+                    parts = command_line.split(":", 3)
+                    if len(parts) < 4:
+                        log_text("RETRANSCRIBE_ERROR", f"Invalid RETRANSCRIBE_AUDIO format: {command_line}")
+                        continue
+                    
+                    request_id = parts[1]
+                    entry_id = parts[2]
+                    model_id = parts[3]
+                    
+                    log_text("RETRANSCRIBE", f"Starting retranscription: entry={entry_id}, model={model_id}")
+                    
+                    # Load audio file from history
+                    audio_path = os.path.join("data", "history", "audio", f"{entry_id}.wav")
+                    if not os.path.exists(audio_path):
+                        error_payload = {
+                            "success": False,
+                            "error": f"Audio file not found: {audio_path}"
+                        }
+                        print(f"RETRANSCRIBE_RESULT:{request_id}:{json.dumps(error_payload)}", flush=True)
+                        sys.stdout.flush()
+                        continue
+                    
+                    # Create a temporary transcription handler with the specified model
+                    import time
+                    start_time = time.time()
+                    
+                    # Use the existing transcription handler's retranscribe method
+                    result_text = app.transcription_handler.retranscribe_audio_file(audio_path, model_id)
+                    
+                    # Apply filler word removal (same as live transcription)
+                    if result_text:
+                        result_text = text_processor.clean_text(result_text)
+                    
+                    duration = time.time() - start_time
+                    
+                    response = {
+                        "success": True,
+                        "entryId": entry_id,
+                        "modelId": model_id,
+                        "transcript": result_text,
+                        "duration": round(duration, 2)
+                    }
+                    print(f"RETRANSCRIBE_RESULT:{request_id}:{json.dumps(response)}", flush=True)
+                    sys.stdout.flush()
+                    log_text("RETRANSCRIBE", f"Completed retranscription in {duration:.2f}s")
+                    
+                except Exception as retrans_err:
+                    log_text("RETRANSCRIBE_ERROR", f"Retranscription failed: {retrans_err}")
+                    error_payload = {
+                        "success": False,
+                        "error": str(retrans_err)
+                    }
+                    if 'request_id' in locals():
+                        print(f"RETRANSCRIBE_RESULT:{request_id}:{json.dumps(error_payload)}", flush=True)
+                        sys.stdout.flush()
+
             elif command_line == "SHUTDOWN":
                 log_text("COMMAND", "Shutdown command received from Electron.")
                 # app.shutdown() # Shutdown is handled in finally block

@@ -2,22 +2,23 @@ console.log('Settings renderer script loaded.');
 
 // --- DOM Elements ---
 const sidebarLinks = {
-    wakewords: document.getElementById('nav-wakewords'),
-    asr: document.getElementById('nav-asr'),
-    vocabulary: document.getElementById('nav-vocabulary'),
+  wakewords: document.getElementById('nav-wakewords'),
+  asr: document.getElementById('nav-asr'),
+  vocabulary: document.getElementById('nav-vocabulary'),
 };
 const sections = {
-    wakewords: document.getElementById('section-wakewords'),
-    asr: document.getElementById('section-asr'),
-    vocabulary: document.getElementById('section-vocabulary'),
+  wakewords: document.getElementById('section-wakewords'),
+  asr: document.getElementById('section-asr'),
+  vocabulary: document.getElementById('section-vocabulary'),
 };
 
 const ASR_MODELS = [
-    { id: 'mlx-community/whisper-large-v3-turbo', name: 'Whisper (large-v3-turbo) – Recommended' },
-    { id: 'mlx-community/parakeet-tdt-0.6b-v2', name: 'Parakeet-TDT-0.6B-v2 – Requires parakeet-mlx' },
-    { id: 'mlx-community/parakeet-tdt-0.6b-v3', name: 'Parakeet-TDT-0.6B-v3 – Latest MLX build' },
-    { id: 'mlx-community/Voxtral-Mini-3B-2507-bf16', name: 'Voxtral Mini 3B (bf16) – MLX Audio' },
-    { id: 'apple:speech:ondevice', name: 'Apple Speech (on-device, macOS) – No model download' }
+  { id: 'mlx-community/whisper-large-v3-turbo', name: 'Whisper (large-v3-turbo) – Recommended' },
+  { id: 'mlx-community/parakeet-tdt-0.6b-v2', name: 'Parakeet-TDT-0.6B-v2 – Requires parakeet-mlx' },
+  { id: 'mlx-community/parakeet-tdt-0.6b-v3', name: 'Parakeet-TDT-0.6B-v3 – Latest MLX build' },
+  { id: 'mlx-community/Voxtral-Mini-3B-2507-bf16', name: 'Voxtral Mini 3B (bf16) – MLX Audio' },
+  { id: 'google/medasr', name: 'MedASR (Medical) – Optimized for medical dictation' },
+  { id: 'apple:speech:ondevice', name: 'Apple Speech (on-device, macOS) – No model download' }
 ];
 
 // ASR Model Elements
@@ -48,224 +49,224 @@ const vocabularyStatus = document.getElementById('vocabulary-status');
 
 // --- Navigation ---
 function showSection(sectionId) {
-    // Hide all sections
-    Object.values(sections).forEach(section => section.style.display = 'none');
-    // Deactivate all sidebar links
-    Object.values(sidebarLinks).forEach(link => link.classList.remove('active'));
+  // Hide all sections
+  Object.values(sections).forEach(section => section.style.display = 'none');
+  // Deactivate all sidebar links
+  Object.values(sidebarLinks).forEach(link => link.classList.remove('active'));
 
-    // Show the target section
-    if (sections[sectionId]) {
-        sections[sectionId].style.display = 'block';
-    }
-    // Activate the target sidebar link
-    if (sidebarLinks[sectionId]) {
-        sidebarLinks[sectionId].classList.add('active');
-    }
+  // Show the target section
+  if (sections[sectionId]) {
+    sections[sectionId].style.display = 'block';
+  }
+  // Activate the target sidebar link
+  if (sidebarLinks[sectionId]) {
+    sidebarLinks[sectionId].classList.add('active');
+  }
 }
 
 Object.keys(sidebarLinks).forEach(key => {
-    if (sidebarLinks[key]) {
-        sidebarLinks[key].addEventListener('click', () => showSection(key));
-    }
+  if (sidebarLinks[key]) {
+    sidebarLinks[key].addEventListener('click', () => showSection(key));
+  }
 });
 
 // --- Model Population ---
 function populateAsrModelDropdown(selectedAsrModel) {
-    if (!asrModelSelect) {
-        return;
-    }
+  if (!asrModelSelect) {
+    return;
+  }
 
-    asrModelSelect.innerHTML = '';
-    ASR_MODELS.forEach(model => {
-        const option = document.createElement('option');
-        option.value = model.id;
-        option.textContent = model.name;
-        asrModelSelect.appendChild(option);
-    });
+  asrModelSelect.innerHTML = '';
+  ASR_MODELS.forEach(model => {
+    const option = document.createElement('option');
+    option.value = model.id;
+    option.textContent = model.name;
+    asrModelSelect.appendChild(option);
+  });
 
-    const modelToSelect = selectedAsrModel || (ASR_MODELS.length > 0 ? ASR_MODELS[0].id : '');
-    if (modelToSelect) {
-        asrModelSelect.value = modelToSelect;
-    }
+  const modelToSelect = selectedAsrModel || (ASR_MODELS.length > 0 ? ASR_MODELS[0].id : '');
+  if (modelToSelect) {
+    asrModelSelect.value = modelToSelect;
+  }
 }
 
 
 // --- Load Settings ---
 async function loadAndPopulateSettings() {
-    console.log('DEBUG: Settings DOM loaded. Requesting settings...');
-    try {
-        const settings = await window.settingsAPI.loadSettings();
+  console.log('DEBUG: Settings DOM loaded. Requesting settings...');
+  try {
+    const settings = await window.settingsAPI.loadSettings();
 
-        console.log('DEBUG: Settings loaded from main:', settings);
+    console.log('DEBUG: Settings loaded from main:', settings);
 
-        // Populate wake words
-        if (settings.wakeWords && typeof settings.wakeWords === 'object') {
-            wakeWordsDictateInput.value = (settings.wakeWords.dictate || []).join(', ');
-        } else {
-            console.warn('Wake words setting missing or invalid. Resetting to defaults.');
-            wakeWordsDictateInput.value = '';
-        }
-        if (wakeWordEnabledToggle) {
-            wakeWordEnabledToggle.checked = settings.wakeWordEnabled !== false;
-        }
-
-        // Populate filler-word controls
-        if (filterFillerToggle) {
-            filterFillerToggle.checked = settings.filterFillerWords !== false;
-        }
-        if (fillerWordsInput) {
-            const fillerWords = Array.isArray(settings.fillerWords) && settings.fillerWords.length > 0
-                ? settings.fillerWords
-                : ['um', 'uh', 'ah', 'er', 'hmm', 'mm', 'mhm'];
-            fillerWordsInput.value = fillerWords.join(', ');
-        }
-        if (autoStopToggle) {
-            autoStopToggle.checked = settings.autoStopOnSilence !== false;
-        }
-
-        // Populate ASR model dropdown
-        populateAsrModelDropdown(settings.selectedAsrModel);
-    } catch (error) {
-        console.error('ERROR: Error loading settings:', error);
-        if (wakeWordsStatus) {
-            wakeWordsStatus.textContent = 'Error loading settings. Please retry.';
-            wakeWordsStatus.style.color = 'red';
-        }
+    // Populate wake words
+    if (settings.wakeWords && typeof settings.wakeWords === 'object') {
+      wakeWordsDictateInput.value = (settings.wakeWords.dictate || []).join(', ');
+    } else {
+      console.warn('Wake words setting missing or invalid. Resetting to defaults.');
+      wakeWordsDictateInput.value = '';
     }
+    if (wakeWordEnabledToggle) {
+      wakeWordEnabledToggle.checked = settings.wakeWordEnabled !== false;
+    }
+
+    // Populate filler-word controls
+    if (filterFillerToggle) {
+      filterFillerToggle.checked = settings.filterFillerWords !== false;
+    }
+    if (fillerWordsInput) {
+      const fillerWords = Array.isArray(settings.fillerWords) && settings.fillerWords.length > 0
+        ? settings.fillerWords
+        : ['um', 'uh', 'ah', 'er', 'hmm', 'mm', 'mhm'];
+      fillerWordsInput.value = fillerWords.join(', ');
+    }
+    if (autoStopToggle) {
+      autoStopToggle.checked = settings.autoStopOnSilence !== false;
+    }
+
+    // Populate ASR model dropdown
+    populateAsrModelDropdown(settings.selectedAsrModel);
+  } catch (error) {
+    console.error('ERROR: Error loading settings:', error);
+    if (wakeWordsStatus) {
+      wakeWordsStatus.textContent = 'Error loading settings. Please retry.';
+      wakeWordsStatus.style.color = 'red';
+    }
+  }
 }
 
 // --- Save Settings ---
 
 // Save ASR Model
 if (saveAsrModelButton) {
-    saveAsrModelButton.addEventListener('click', async () => {
-        if (!asrModelSelect) {
-            return;
-        }
-        const selectedAsrModel = asrModelSelect.value;
-        if (!selectedAsrModel) {
-            asrModelStatus.textContent = 'Select an ASR model first.';
-            asrModelStatus.style.color = 'red';
-            return;
-        }
+  saveAsrModelButton.addEventListener('click', async () => {
+    if (!asrModelSelect) {
+      return;
+    }
+    const selectedAsrModel = asrModelSelect.value;
+    if (!selectedAsrModel) {
+      asrModelStatus.textContent = 'Select an ASR model first.';
+      asrModelStatus.style.color = 'red';
+      return;
+    }
 
-        try {
-            saveAsrModelButton.disabled = true;
-            asrModelSelect.disabled = true;
-            asrModelStatus.textContent = 'Preparing model assets…';
-            asrModelStatus.style.color = '#ffb400';
+    try {
+      saveAsrModelButton.disabled = true;
+      asrModelSelect.disabled = true;
+      asrModelStatus.textContent = 'Preparing model assets…';
+      asrModelStatus.style.color = '#ffb400';
 
-            const ensureResult = await window.settingsAPI.ensureModel(selectedAsrModel);
-            if (!ensureResult || ensureResult.success === false) {
-                const errorMessage = ensureResult?.error || 'Model preparation failed.';
-                throw new Error(errorMessage);
-            }
+      const ensureResult = await window.settingsAPI.ensureModel(selectedAsrModel);
+      if (!ensureResult || ensureResult.success === false) {
+        const errorMessage = ensureResult?.error || 'Model preparation failed.';
+        throw new Error(errorMessage);
+      }
 
-            window.settingsAPI.saveSettings({ selectedAsrModel });
-            asrModelStatus.textContent = 'ASR model downloaded and saved!';
-            asrModelStatus.style.color = 'green';
-            setTimeout(() => { asrModelStatus.textContent = ''; }, 3500);
-        } catch (error) {
-            console.error('Failed to prepare ASR model', error);
-            asrModelStatus.textContent = `Model setup failed: ${error?.message || error}`;
-            asrModelStatus.style.color = 'red';
-        } finally {
-            saveAsrModelButton.disabled = false;
-            asrModelSelect.disabled = false;
-        }
-    });
+      window.settingsAPI.saveSettings({ selectedAsrModel });
+      asrModelStatus.textContent = 'ASR model downloaded and saved!';
+      asrModelStatus.style.color = 'green';
+      setTimeout(() => { asrModelStatus.textContent = ''; }, 3500);
+    } catch (error) {
+      console.error('Failed to prepare ASR model', error);
+      asrModelStatus.textContent = `Model setup failed: ${error?.message || error}`;
+      asrModelStatus.style.color = 'red';
+    } finally {
+      saveAsrModelButton.disabled = false;
+      asrModelSelect.disabled = false;
+    }
+  });
 }
 
 // Helper function to parse comma-separated string into array
 const parseWakeWords = (inputString) => {
-    return inputString.split(',')
-                      .map(word => word.trim())
-                      .filter(word => word.length > 0);
+  return inputString.split(',')
+    .map(word => word.trim())
+    .filter(word => word.length > 0);
 };
 
 if (saveDictationButton) {
-    saveDictationButton.addEventListener('click', () => {
-        const wakeWordsData = {
-            dictate: parseWakeWords(wakeWordsDictateInput.value)
-        };
+  saveDictationButton.addEventListener('click', () => {
+    const wakeWordsData = {
+      dictate: parseWakeWords(wakeWordsDictateInput.value)
+    };
 
-        const fillerWords = parseWakeWords(fillerWordsInput.value);
-        const payload = {
-            wakeWords: wakeWordsData,
-            filterFillerWords: !!filterFillerToggle.checked,
-            fillerWords,
-            autoStopOnSilence: autoStopToggle ? !!autoStopToggle.checked : true,
-            wakeWordEnabled: wakeWordEnabledToggle ? !!wakeWordEnabledToggle.checked : true
-        };
+    const fillerWords = parseWakeWords(fillerWordsInput.value);
+    const payload = {
+      wakeWords: wakeWordsData,
+      filterFillerWords: !!filterFillerToggle.checked,
+      fillerWords,
+      autoStopOnSilence: autoStopToggle ? !!autoStopToggle.checked : true,
+      wakeWordEnabled: wakeWordEnabledToggle ? !!wakeWordEnabledToggle.checked : true
+    };
 
-        console.log('DEBUG: Saving dictation settings:', payload);
-        window.settingsAPI.saveSettings(payload);
-        wakeWordsStatus.textContent = 'Dictation settings saved!';
-        wakeWordsStatus.style.color = 'green';
-        setTimeout(() => { wakeWordsStatus.textContent = ''; }, 3000);
-    });
+    console.log('DEBUG: Saving dictation settings:', payload);
+    window.settingsAPI.saveSettings(payload);
+    wakeWordsStatus.textContent = 'Dictation settings saved!';
+    wakeWordsStatus.style.color = 'green';
+    setTimeout(() => { wakeWordsStatus.textContent = ''; }, 3000);
+  });
 }
 
 // --- Vocabulary Management ---
 let currentVocabularyTerms = [];
 
 async function loadVocabularyData() {
-    console.log('loadVocabularyData called');
-    try {
-        // Call vocabulary API to get current vocabulary and stats
-        console.log('Making vocabulary API calls...');
-        const [termsResult, statsResult] = await Promise.all([
-            window.settingsAPI.callVocabularyAPI('get_list'),
-            window.settingsAPI.callVocabularyAPI('get_stats')
-        ]);
-        
-        console.log('Terms result:', termsResult);
-        console.log('Stats result:', statsResult);
-        
-        if (termsResult.success) {
-            console.log('Setting currentVocabularyTerms and calling displayVocabularyList');
-            currentVocabularyTerms = termsResult.terms;
-            displayVocabularyList(currentVocabularyTerms);
-        } else {
-            console.error('Terms result was not successful:', termsResult);
-        }
-        
-        if (statsResult.success) {
-            console.log('Calling displayVocabularyStats');
-            displayVocabularyStats(statsResult.stats);
-        } else {
-            console.error('Stats result was not successful:', statsResult);
-        }
-    } catch (error) {
-        console.error('Error loading vocabulary data:', error);
-        const vocabularyStatusElement = document.getElementById('vocabulary-status');
-        if (vocabularyStatusElement) {
-            vocabularyStatusElement.textContent = 'Error loading vocabulary data';
-            vocabularyStatusElement.style.color = 'red';
-        }
+  console.log('loadVocabularyData called');
+  try {
+    // Call vocabulary API to get current vocabulary and stats
+    console.log('Making vocabulary API calls...');
+    const [termsResult, statsResult] = await Promise.all([
+      window.settingsAPI.callVocabularyAPI('get_list'),
+      window.settingsAPI.callVocabularyAPI('get_stats')
+    ]);
+
+    console.log('Terms result:', termsResult);
+    console.log('Stats result:', statsResult);
+
+    if (termsResult.success) {
+      console.log('Setting currentVocabularyTerms and calling displayVocabularyList');
+      currentVocabularyTerms = termsResult.terms;
+      displayVocabularyList(currentVocabularyTerms);
+    } else {
+      console.error('Terms result was not successful:', termsResult);
     }
+
+    if (statsResult.success) {
+      console.log('Calling displayVocabularyStats');
+      displayVocabularyStats(statsResult.stats);
+    } else {
+      console.error('Stats result was not successful:', statsResult);
+    }
+  } catch (error) {
+    console.error('Error loading vocabulary data:', error);
+    const vocabularyStatusElement = document.getElementById('vocabulary-status');
+    if (vocabularyStatusElement) {
+      vocabularyStatusElement.textContent = 'Error loading vocabulary data';
+      vocabularyStatusElement.style.color = 'red';
+    }
+  }
 }
 
 function displayVocabularyStats(stats) {
-    console.log('displayVocabularyStats called with:', stats);
-    const statsTextElement = document.getElementById('stats-text');
-    if (!statsTextElement) {
-        console.error('stats-text element not found');
-        return;
-    }
-    console.log('stats-text element found:', statsTextElement);
-    
-    const totalTerms = stats.total_terms || 0;
-    const totalUsage = stats.total_usage || 0;
-    const categories = stats.categories || {};
-    
-    const categoryText = Object.entries(categories)
-        .map(([cat, count]) => `${cat}: ${count}`)
-        .join(', ');
-    
-    const finalText = `${totalTerms} terms, ${totalUsage} total uses. Categories: ${categoryText}`;
-    console.log('Setting stats text to:', finalText);
-    statsTextElement.textContent = finalText;
+  console.log('displayVocabularyStats called with:', stats);
+  const statsTextElement = document.getElementById('stats-text');
+  if (!statsTextElement) {
+    console.error('stats-text element not found');
+    return;
+  }
+  console.log('stats-text element found:', statsTextElement);
+
+  const totalTerms = stats.total_terms || 0;
+  const totalUsage = stats.total_usage || 0;
+  const categories = stats.categories || {};
+
+  const categoryText = Object.entries(categories)
+    .map(([cat, count]) => `${cat}: ${count}`)
+    .join(', ');
+
+  const finalText = `${totalTerms} terms, ${totalUsage} total uses. Categories: ${categoryText}`;
+  console.log('Setting stats text to:', finalText);
+  statsTextElement.textContent = finalText;
 }
 
 function displayVocabularyList(terms) {
@@ -276,7 +277,7 @@ function displayVocabularyList(terms) {
     return;
   }
   console.log('vocabulary-list element found:', vocabularyListElement);
-  
+
   if (!terms || terms.length === 0) {
     console.log('No terms to display');
     vocabularyListElement.innerHTML = '<div style="text-align: center; padding: 40px; color: #666;">No vocabulary terms yet. Add some terms above!</div>';
@@ -349,36 +350,36 @@ function displayVocabularyList(terms) {
 }
 
 function filterVocabularyList() {
-    const searchTerm = vocabSearch.value.toLowerCase();
-    const filteredTerms = currentVocabularyTerms.filter(term => 
-        term.correct.toLowerCase().includes(searchTerm) ||
-        term.variations.some(variation => variation.toLowerCase().includes(searchTerm))
-    );
-    displayVocabularyList(filteredTerms);
+  const searchTerm = vocabSearch.value.toLowerCase();
+  const filteredTerms = currentVocabularyTerms.filter(term =>
+    term.correct.toLowerCase().includes(searchTerm) ||
+    term.variations.some(variation => variation.toLowerCase().includes(searchTerm))
+  );
+  displayVocabularyList(filteredTerms);
 }
 
 async function deleteVocabularyTerm(termKey) {
-    if (!confirm('Are you sure you want to delete this vocabulary term?')) {
-        return;
+  if (!confirm('Are you sure you want to delete this vocabulary term?')) {
+    return;
+  }
+
+  try {
+    const result = await window.settingsAPI.callVocabularyAPI('delete_term', { term_key: termKey });
+
+    if (result.success) {
+      vocabularyStatus.textContent = result.message;
+      vocabularyStatus.style.color = 'green';
+      loadVocabularyData(); // Reload the list
+    } else {
+      vocabularyStatus.textContent = result.error;
+      vocabularyStatus.style.color = 'red';
     }
-    
-    try {
-        const result = await window.settingsAPI.callVocabularyAPI('delete_term', { term_key: termKey });
-        
-        if (result.success) {
-            vocabularyStatus.textContent = result.message;
-            vocabularyStatus.style.color = 'green';
-            loadVocabularyData(); // Reload the list
-        } else {
-            vocabularyStatus.textContent = result.error;
-            vocabularyStatus.style.color = 'red';
-        }
-    } catch (error) {
-        vocabularyStatus.textContent = 'Error deleting term';
-        vocabularyStatus.style.color = 'red';
-    }
-    
-    setTimeout(() => { vocabularyStatus.textContent = ''; }, 3000);
+  } catch (error) {
+    vocabularyStatus.textContent = 'Error deleting term';
+    vocabularyStatus.style.color = 'red';
+  }
+
+  setTimeout(() => { vocabularyStatus.textContent = ''; }, 3000);
 }
 
 // Edit Term Functionality
@@ -415,14 +416,14 @@ let currentEditingVariations = [];
 
 function displayEditableVariations(variations, container) {
   const allVariations = [...variations, ...currentEditingVariations];
-  
+
   if (allVariations.length === 0) {
     container.innerHTML = '<span style="color: #666; font-style: italic;">No variations yet</span>';
     return;
   }
 
   container.innerHTML = '';
-  
+
   allVariations.forEach((variation, index) => {
     if (variationsToDelete.includes(variation)) {
       return; // Skip deleted variations
@@ -430,21 +431,21 @@ function displayEditableVariations(variations, container) {
 
     const variationSpan = document.createElement('span');
     variationSpan.style.cssText = 'display: inline-flex; align-items: center; background: #e9ecef; padding: 6px 8px 6px 12px; margin: 3px; border-radius: 4px; font-size: 13px; position: relative; cursor: pointer; transition: all 0.2s ease;';
-    
+
     // Add indicator for newly added variations
     if (currentEditingVariations.includes(variation)) {
       variationSpan.style.background = '#d4edda';
       variationSpan.style.border = '1px solid #c3e6cb';
     }
-    
+
     // Create text content
     const textSpan = document.createElement('span');
     textSpan.textContent = variation;
-    
+
     // Create delete button space
     const deleteSpace = document.createElement('span');
     deleteSpace.style.cssText = 'width: 16px; height: 16px; position: relative; flex-shrink: 0;';
-    
+
     const deleteBtn = document.createElement('button');
     deleteBtn.innerHTML = '×';
     deleteBtn.style.cssText = 'position: absolute; top: 0; left: 0; width: 16px; height: 16px; background: rgba(108, 117, 125, 0.7); color: white; border: none; border-radius: 50%; font-size: 11px; cursor: pointer; line-height: 1; display: flex; align-items: center; justify-content: center; opacity: 0; transition: all 0.2s ease; font-weight: bold;';
@@ -460,16 +461,16 @@ function displayEditableVariations(variations, container) {
       deleteBtn.style.background = 'rgba(108, 117, 125, 0.7)';
       deleteBtn.style.transform = 'scale(1)';
     });
-    
+
     // Show/hide delete button on hover
     variationSpan.addEventListener('mouseenter', () => {
       deleteBtn.style.opacity = '1';
     });
-    
+
     variationSpan.addEventListener('mouseleave', () => {
       deleteBtn.style.opacity = '0';
     });
-    
+
     deleteBtn.addEventListener('click', () => {
       if (currentEditingVariations.includes(variation)) {
         // Remove from newly added variations
@@ -480,7 +481,7 @@ function displayEditableVariations(variations, container) {
       }
       displayEditableVariations(currentEditingTerm.variations.slice(1), container);
     });
-    
+
     // Append elements in correct order
     deleteSpace.appendChild(deleteBtn);
     variationSpan.appendChild(textSpan);
@@ -497,26 +498,26 @@ function displayEditableVariations(variations, container) {
 function addNewVariation() {
   const newVariationInput = document.getElementById('edit-new-variation-input');
   const variationsList = document.getElementById('edit-variations-list');
-  
+
   if (!newVariationInput || !currentEditingTerm) return;
-  
+
   const newVariation = newVariationInput.value.trim();
   if (!newVariation) return;
-  
+
   // Check for duplicates
   const allExistingVariations = [
     ...currentEditingTerm.variations,
     ...currentEditingVariations
   ];
-  
+
   if (allExistingVariations.some(v => v.toLowerCase() === newVariation.toLowerCase())) {
     alert('This variation already exists!');
     return;
   }
-  
+
   // Add to current editing variations
   currentEditingVariations.push(newVariation);
-  
+
   // Clear input and refresh display
   newVariationInput.value = '';
   displayEditableVariations(currentEditingTerm.variations.slice(1), variationsList);
@@ -541,7 +542,7 @@ async function saveEditedTerm() {
     if (result.success) {
       vocabularyStatus.textContent = result.message;
       vocabularyStatus.style.color = 'green';
-      
+
       // Close modal and reload vocabulary
       modal.style.display = 'none';
       currentEditingTerm = null;
@@ -612,72 +613,72 @@ window.editVocabularyTerm = editVocabularyTerm;
 
 // Vocabulary Event Listeners
 if (addTermButton) {
-    addTermButton.addEventListener('click', async () => {
-        const correct = newTermCorrect.value.trim();
-        const variationsText = newTermVariations.value.trim();
-        const category = newTermCategory.value;
-        
-        if (!correct) {
-            vocabularyStatus.textContent = 'Please enter a correct term';
-            vocabularyStatus.style.color = 'red';
-            return;
-        }
-        
-        const variations = variationsText ? 
-            variationsText.split(',').map(v => v.trim()).filter(v => v) : 
-            [];
-        
-        try {
-            const result = await window.settingsAPI.callVocabularyAPI('add_term', {
-                correct_term: correct,
-                variations: variations,
-                category: category
-            });
-            
-            if (result.success) {
-                vocabularyStatus.textContent = result.message;
-                vocabularyStatus.style.color = 'green';
-                
-                // Clear form
-                newTermCorrect.value = '';
-                newTermVariations.value = '';
-                newTermCategory.value = 'general';
-                
-                // Reload vocabulary
-                loadVocabularyData();
-            } else {
-                vocabularyStatus.textContent = result.error;
-                vocabularyStatus.style.color = 'red';
-            }
-        } catch (error) {
-            vocabularyStatus.textContent = 'Error adding term';
-            vocabularyStatus.style.color = 'red';
-        }
-        
-        setTimeout(() => { vocabularyStatus.textContent = ''; }, 3000);
-    });
+  addTermButton.addEventListener('click', async () => {
+    const correct = newTermCorrect.value.trim();
+    const variationsText = newTermVariations.value.trim();
+    const category = newTermCategory.value;
+
+    if (!correct) {
+      vocabularyStatus.textContent = 'Please enter a correct term';
+      vocabularyStatus.style.color = 'red';
+      return;
+    }
+
+    const variations = variationsText ?
+      variationsText.split(',').map(v => v.trim()).filter(v => v) :
+      [];
+
+    try {
+      const result = await window.settingsAPI.callVocabularyAPI('add_term', {
+        correct_term: correct,
+        variations: variations,
+        category: category
+      });
+
+      if (result.success) {
+        vocabularyStatus.textContent = result.message;
+        vocabularyStatus.style.color = 'green';
+
+        // Clear form
+        newTermCorrect.value = '';
+        newTermVariations.value = '';
+        newTermCategory.value = 'general';
+
+        // Reload vocabulary
+        loadVocabularyData();
+      } else {
+        vocabularyStatus.textContent = result.error;
+        vocabularyStatus.style.color = 'red';
+      }
+    } catch (error) {
+      vocabularyStatus.textContent = 'Error adding term';
+      vocabularyStatus.style.color = 'red';
+    }
+
+    setTimeout(() => { vocabularyStatus.textContent = ''; }, 3000);
+  });
 }
 
 if (vocabSearch) {
-    vocabSearch.addEventListener('input', filterVocabularyList);
+  vocabSearch.addEventListener('input', filterVocabularyList);
 }
 
 // --- Initialization ---
 window.addEventListener('DOMContentLoaded', () => {
-    loadAndPopulateSettings();
-    loadVocabularyData(); // Load vocabulary data
-    showSection('wakewords'); // Show the first section by default
+  loadAndPopulateSettings();
+  loadVocabularyData(); // Load vocabulary data
+  showSection('wakewords'); // Show the first section by default
 
-    // Listen for navigation requests from main process (e.g., direct vocabulary access)
-    window.settingsAPI.onNavigateToSection((event, section) => {
-        if (section === 'vocabulary') {
-            console.log('Navigating to vocabulary section via tray menu');
-            showSection('vocabulary'); // Use 'vocabulary' not 'section-vocabulary'
-            // The showSection function already handles sidebar activation, but let's be explicit
-            setTimeout(() => {
-                console.log('Loading vocabulary data after navigation...');
-                loadVocabularyData();
-            }, 100);
-        }
-    });
+  // Listen for navigation requests from main process (e.g., direct vocabulary access)
+  window.settingsAPI.onNavigateToSection((event, section) => {
+    if (section === 'vocabulary') {
+      console.log('Navigating to vocabulary section via tray menu');
+      showSection('vocabulary'); // Use 'vocabulary' not 'section-vocabulary'
+      // The showSection function already handles sidebar activation, but let's be explicit
+      setTimeout(() => {
+        console.log('Loading vocabulary data after navigation...');
+        loadVocabularyData();
+      }, 100);
+    }
+  });
 });

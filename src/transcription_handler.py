@@ -111,11 +111,13 @@ except ImportError:
 
 try:
     from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline as hf_pipeline
+    from transformers import AutoModelForCTC
     TRANSFORMERS_AVAILABLE = True
 except ImportError:
     TRANSFORMERS_AVAILABLE = False
     AutoModelForSpeechSeq2Seq = None  # type: ignore
     AutoProcessor = None  # type: ignore
+    AutoModelForCTC = None  # type: ignore
     hf_pipeline = None  # type: ignore
 
 try:
@@ -295,7 +297,7 @@ class TranscriptionHandler:
                 self.parakeet_model = None
 
         # Check if we're in a CI environment (missing key dependencies)
-        if not MLX_WHISPER_AVAILABLE and not PARAKEET_MLX_AVAILABLE and not MLX_AUDIO_AVAILABLE:
+        if not MLX_WHISPER_AVAILABLE and not PARAKEET_MLX_AVAILABLE and not MLX_AUDIO_AVAILABLE and not TRANSFORMERS_AVAILABLE and not TORCH_AVAILABLE:
             self._log_status("Transcription handler initialized in CI mode - dependencies mocked", "orange")
             self.local_model_path_prepared = "./mock_model_path"
             return
@@ -438,6 +440,8 @@ class TranscriptionHandler:
             return "apple"
         if "voxtral" in model_id_lower:
             return "voxtral"
+        if "medasr" in model_id_lower or model_id_lower == "google/medasr":
+            return "medasr"
         if "parakeet" in model_id_lower:
             # Check if parakeet_mlx is available, if not, fall back to whisper
             if not PARAKEET_MLX_AVAILABLE:
@@ -469,13 +473,43 @@ class TranscriptionHandler:
         except Exception:
             cfg_data = {}
 
-        # Whisper repos include detailed "dims" metadata; bail out if missing to avoid partial bundles.
-        if not isinstance(cfg_data, dict) or "dims" not in cfg_data:
+        # MedASR models have model_type in config instead of dims
+        is_medasr = "medasr" in model_id.lower()
+        if is_medasr:
+            # MedASR models have model_type and architectures in config.json
+            if not isinstance(cfg_data, dict) or "model_type" not in cfg_data:
+                return None
+            # Check for model.safetensors instead of tokenizer.json as the main artifact
+            model_file = os.path.join(normalized_path, "model.safetensors")
+            if not os.path.exists(model_file):
+                return None
+            return normalized_path
+
+        # Whisper/Parakeet/Voxtral models: check for valid config structure
+        # MLX Whisper configs use flat keys (n_mels, n_audio_ctx, etc.) OR nested "dims"
+        if not isinstance(cfg_data, dict):
+            return None
+
+        # Check for MLX Whisper flat config format (n_mels at top level)
+        is_mlx_whisper_flat = "n_mels" in cfg_data and "n_audio_ctx" in cfg_data
+        # Check for legacy dims-based config
+        has_dims = "dims" in cfg_data
+        # Check for Parakeet config (has vocab_size typically)
+        is_parakeet = "parakeet" in model_id.lower()
+
+        if not (is_mlx_whisper_flat or has_dims or is_parakeet):
             return None
 
         tokenizer_file = os.path.join(normalized_path, "tokenizer.json")
         if not os.path.exists(tokenizer_file):
-            return None
+            # MLX models may use various weight file formats
+            weight_files = [
+                os.path.join(normalized_path, "weights.npz"),
+                os.path.join(normalized_path, "weights.safetensors"),
+                os.path.join(normalized_path, "model.safetensors"),
+            ]
+            if not any(os.path.exists(wf) for wf in weight_files):
+                return None
 
         return normalized_path
 
@@ -488,6 +522,10 @@ class TranscriptionHandler:
 
     def _detect_whisper_backend(self, model_id: str) -> str:
         """Return 'mlx' for MLX-native repos, otherwise 'transformers'."""
+        # Fallback to transformers if MLX is not available but Transformers is
+        if not MLX_WHISPER_AVAILABLE and TRANSFORMERS_AVAILABLE:
+            return "transformers"
+
         if not model_id:
             return "mlx"
         mid = model_id.lower()
@@ -886,7 +924,45 @@ class TranscriptionHandler:
                     language="en",
                 )
                 raw_text = getattr(result, "text", "").strip() if result is not None else ""
+
+            elif self.model_type == "medasr":
+                self._log_status(f"Using MedASR for transcription with model: {self.selected_asr_model}", "blue")
+                if not TRANSFORMERS_AVAILABLE:
+                    error_msg = "MedASR transcription failed - transformers library not installed. Please run: pip install transformers"
+                    self._log_status(error_msg, "red")
+                    raise RuntimeError(error_msg)
                 
+                try:
+                    # Load pipeline (lazy load and cache)
+                    if not hasattr(self, '_medasr_pipeline') or self._medasr_pipeline is None:
+                        model_path = self.local_model_path_prepared or self.selected_asr_model
+                        self._log_status(f"Loading MedASR pipeline from: {model_path}", "grey")
+                        
+                        self._medasr_pipeline = hf_pipeline(
+                            "automatic-speech-recognition",
+                            model=model_path
+                        )
+                        self._log_status("MedASR pipeline loaded successfully", "grey")
+                    
+                    # Run transcription
+                    result = self._medasr_pipeline(
+                        filename,
+                        chunk_length_s=20,
+                        stride_length_s=2
+                    )
+                    raw_text = result.get("text", "").strip()
+                    
+                    # Clean up MedASR formatting tokens
+                    raw_text = raw_text.replace("{period}", ".").replace("{comma}", ",")
+                    raw_text = raw_text.replace("{colon}", ":").replace("{new paragraph}", "\n\n")
+                    raw_text = raw_text.replace("</s>", "").strip()
+                    
+                    self._log_status(f"MedASR transcription complete: {len(raw_text)} chars", "grey")
+                    
+                except Exception as medasr_error:
+                    self._log_status(f"MedASR transcription error: {medasr_error}", "red")
+                    raise
+
             elif self.model_type == "parakeet":
                 self._log_status(f"Using Parakeet-MLX for transcription with model: {self.selected_asr_model}", "blue")
                 
@@ -1130,6 +1206,129 @@ class TranscriptionHandler:
         finally:
             if temp_ctx is not None:
                 temp_ctx.cleanup()
+
+    def retranscribe_audio_file(self, audio_path: str, model_id: str) -> str:
+        """
+        Transcribe an audio file using a specified ASR model.
+        Used for re-transcribing historical audio with different models.
+        
+        Args:
+            audio_path: Path to the WAV audio file
+            model_id: Model identifier (e.g., 'google/medasr', 'mlx-community/whisper-large-v3-turbo')
+            
+        Returns:
+            Transcribed text
+        """
+        self._log_status(f"Re-transcribing with model: {model_id}", "blue")
+        
+        # Detect model type for this specific model
+        model_type = self._detect_model_type(model_id)
+        self._log_status(f"Detected model type: {model_type}", "grey")
+        
+        # Get or prepare local model path
+        local_model_path = self._get_local_model_dir(model_id)
+        if not local_model_path:
+            local_model_path = model_id  # Will try to download/use from HF Hub
+        
+        # Route to appropriate transcription method based on model type
+        if model_type == "medasr":
+            return self._retranscribe_with_medasr(audio_path, local_model_path)
+        elif model_type == "parakeet":
+            return self._retranscribe_with_parakeet(audio_path, local_model_path)
+        elif model_type == "voxtral":
+            return self._retranscribe_with_voxtral(audio_path, local_model_path)
+        elif model_type == "apple":
+            return self._transcribe_with_apple_speech(audio_path)
+        else:
+            # Default to Whisper (MLX or Transformers)
+            return self._retranscribe_with_whisper(audio_path, local_model_path, model_id)
+
+    def _retranscribe_with_medasr(self, audio_path: str, model_path: str) -> str:
+        """Re-transcribe using MedASR pipeline."""
+        if not TRANSFORMERS_AVAILABLE:
+            raise RuntimeError("transformers library not available for MedASR")
+        
+        # Use existing cached pipeline or create new one
+        if not hasattr(self, '_medasr_pipeline') or self._medasr_pipeline is None:
+            self._log_status(f"Loading MedASR pipeline from: {model_path}", "grey")
+            self._medasr_pipeline = hf_pipeline(
+                "automatic-speech-recognition",
+                model=model_path
+            )
+            self._log_status("MedASR pipeline loaded successfully", "grey")
+        
+        result = self._medasr_pipeline(
+            audio_path,
+            chunk_length_s=20,
+            stride_length_s=2
+        )
+        raw_text = result.get("text", "").strip()
+        
+        # Clean up MedASR formatting tokens
+        raw_text = raw_text.replace("{period}", ".").replace("{comma}", ",")
+        raw_text = raw_text.replace("{colon}", ":").replace("{new paragraph}", "\n\n")
+        raw_text = raw_text.replace("</s>", "").strip()
+        
+        return raw_text
+
+    def _retranscribe_with_parakeet(self, audio_path: str, model_path: str) -> str:
+        """Re-transcribe using Parakeet MLX."""
+        if not PARAKEET_MLX_AVAILABLE:
+            raise RuntimeError("parakeet_mlx library not available")
+        
+        load_target = model_path or "mlx-community/parakeet-tdt-0.6b-v2"
+        
+        # Check if we need to load a different model than currently cached
+        current_loaded = getattr(self, '_parakeet_loaded_model_id', None)
+        if self.parakeet_model is None or current_loaded != load_target:
+            self._log_status(f"Loading Parakeet model: {load_target}", "grey")
+            try:
+                self.parakeet_model = parakeet_mlx.from_pretrained(load_target)
+                self._parakeet_loaded_model_id = load_target
+                self._log_status(f"Parakeet model loaded successfully: {load_target}", "grey")
+            except Exception as e:
+                self._log_status(f"Failed to load Parakeet model: {e}", "red")
+                raise RuntimeError(f"Failed to load Parakeet model '{load_target}': {e}") from e
+        
+        self._log_status(f"Transcribing with Parakeet: {audio_path}", "grey")
+        result = self.parakeet_model.transcribe(audio_path)
+        
+        if hasattr(result, 'text'):
+            return result.text.strip()
+        elif hasattr(result, 'tokens') and result.tokens:
+            return ''.join([token.text for token in result.tokens if hasattr(token, 'text')]).strip()
+        return str(result).strip()
+
+    def _retranscribe_with_voxtral(self, audio_path: str, model_path: str) -> str:
+        """Re-transcribe using Voxtral (mlx-audio)."""
+        if not MLX_AUDIO_AVAILABLE:
+            raise RuntimeError("mlx-audio library not available")
+        
+        if self.voxtral_model is None:
+            self._log_status(f"Loading Voxtral model: {model_path}", "grey")
+            self.voxtral_model = mlx_audio_generate.load_model(model_path)
+        
+        generation_stream = getattr(mlx_audio_generate, "generation_stream", False)
+        result = self.voxtral_model.generate(
+            audio_path,
+            verbose=False,
+            generation_stream=generation_stream,
+            language="en",
+        )
+        return getattr(result, "text", "").strip() if result else ""
+
+    def _retranscribe_with_whisper(self, audio_path: str, model_path: str, model_id: str) -> str:
+        """Re-transcribe using Whisper (MLX or Transformers)."""
+        backend = self._detect_whisper_backend(model_id)
+        
+        if backend == "transformers" and TRANSFORMERS_AVAILABLE and TORCH_AVAILABLE:
+            return self._transcribe_with_transformers_whisper(audio_path, model_path or model_id, "")
+        elif MLX_WHISPER_AVAILABLE:
+            whisper_kwargs = self._build_mlx_whisper_kwargs("", model_path or model_id)
+            result = mlx_whisper.transcribe(audio_path, **whisper_kwargs)
+            return result.get("text", "").strip()
+        else:
+            raise RuntimeError("No Whisper backend available (mlx_whisper or transformers)")
 
     def _transcribe_with_transformers_whisper(self, audio_path: str, model_id: str, prompt: str) -> str:
         if not (TRANSFORMERS_AVAILABLE and TORCH_AVAILABLE):
