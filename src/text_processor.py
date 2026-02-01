@@ -84,6 +84,9 @@ class TextProcessor:
         # Apply filler word removal
         cleaned = self.remove_filler_words(text)
 
+        # Fix capitalization after sentence-ending punctuation
+        cleaned = self._capitalize_sentences(cleaned)
+
         # Trim pathological trailing repetition (e.g., single word or short n-gram looped)
         cleaned = self._trim_trailing_repetition(cleaned)
         
@@ -91,6 +94,30 @@ class TextProcessor:
         # e.g., punctuation correction, capitalization, etc.
         
         return cleaned
+
+    def _capitalize_sentences(self, text: str) -> str:
+        """
+        Capitalize the first letter after sentence-ending punctuation.
+        Handles cases where filler words were removed from sentence start.
+        """
+        if not text:
+            return text
+        
+        # Capitalize first character of the text
+        if text and text[0].islower():
+            text = text[0].upper() + text[1:]
+        
+        # Capitalize after . ! ?
+        def capitalize_match(match):
+            punctuation = match.group(1)
+            space = match.group(2)
+            char = match.group(3)
+            return punctuation + space + char.upper()
+        
+        # Pattern: sentence-ending punctuation, whitespace, then lowercase letter
+        result = re.sub(r'([.!?])(\s+)([a-z])', capitalize_match, text)
+        
+        return result
 
     def _trim_trailing_repetition(self, text: str) -> str:
         """
