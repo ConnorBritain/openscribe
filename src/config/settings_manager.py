@@ -34,6 +34,7 @@ class SettingsManager:
             "filterFillerWords": True,  # New setting for filler word filtering
             "fillerWords": ["um", "uh", "ah", "er", "hmm", "mm", "mhm"],  # Default filler words
             "autoStopOnSilence": True,  # Automatically stop dictation after sustained silence
+            "useMedGemmaPostProcessing": False,  # Optional LLM post-processing for MedASR
         }
     
     def load_settings(self) -> Dict[str, Any]:

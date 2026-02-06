@@ -1,24 +1,89 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+    <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
     <title>Settings</title>
     <style>
-        body { font-family: sans-serif; display: flex; margin: 0; height: 100vh; }
-        #sidebar { width: 200px; background-color: #f0f0f0; padding: 20px; border-right: 1px solid #ccc; }
-        #content { flex-grow: 1; padding: 20px; overflow-y: auto; }
-        .settings-section { margin-bottom: 30px; border-bottom: 1px solid #eee; padding-bottom: 20px; }
-        label { display: block; margin-bottom: 5px; font-weight: bold; }
-        input[type="text"], textarea { width: 90%; padding: 8px; margin-bottom: 10px; border: 1px solid #ccc; border-radius: 4px; }
-        textarea { height: 100px; }
-        button { padding: 10px 15px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
-        button:hover { background-color: #0056b3; }
-        ul { list-style: none; padding: 0; }
-        li { padding: 10px; cursor: pointer; border-radius: 4px; margin-bottom: 5px; }
-        li:hover, li.active { background-color: #e0e0e0; }
+        body {
+            font-family: sans-serif;
+            display: flex;
+            margin: 0;
+            height: 100vh;
+        }
+
+        #sidebar {
+            width: 200px;
+            background-color: #f0f0f0;
+            padding: 20px;
+            border-right: 1px solid #ccc;
+        }
+
+        #content {
+            flex-grow: 1;
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .settings-section {
+            margin-bottom: 30px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+
+        input[type="text"],
+        textarea {
+            width: 90%;
+            padding: 8px;
+            margin-bottom: 10px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+
+        textarea {
+            height: 100px;
+        }
+
+        button {
+            padding: 10px 15px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        li {
+            padding: 10px;
+            cursor: pointer;
+            border-radius: 4px;
+            margin-bottom: 5px;
+        }
+
+        li:hover,
+        li.active {
+            background-color: #e0e0e0;
+        }
     </style>
 </head>
+
 <body>
     <div id="sidebar">
         <h2>Settings</h2>
@@ -39,14 +104,17 @@
                 <input type="text" id="wake-words-dictate-input" placeholder="e.g., note, dictate">
             </div>
             <div style="margin: 10px 0;">
-                <label for="wake-word-enabled-toggle" style="display: flex; align-items: center; gap: 8px; font-weight: normal;">
+                <label for="wake-word-enabled-toggle"
+                    style="display: flex; align-items: center; gap: 8px; font-weight: normal;">
                     <input type="checkbox" id="wake-word-enabled-toggle" checked>
                     Listen for wake words (voice activation)
                 </label>
-                <small style="display:block; color:#666; margin-top:4px;">Turn off to rely on hotkeys/manual controls only.</small>
+                <small style="display:block; color:#666; margin-top:4px;">Turn off to rely on hotkeys/manual controls
+                    only.</small>
             </div>
             <div style="margin: 12px 0;">
-                <label for="filter-filler-toggle" style="display: flex; align-items: center; gap: 8px; font-weight: normal;">
+                <label for="filter-filler-toggle"
+                    style="display: flex; align-items: center; gap: 8px; font-weight: normal;">
                     <input type="checkbox" id="filter-filler-toggle">
                     Remove filler words automatically
                 </label>
@@ -54,14 +122,17 @@
             <div>
                 <label for="filler-words-input">Filler words to remove:</label>
                 <textarea id="filler-words-input" placeholder="um, uh, ah, er"></textarea>
-                <small style="display:block; color:#666; margin-top:4px;">Comma-separated list (e.g., um, uh, er)</small>
+                <small style="display:block; color:#666; margin-top:4px;">Comma-separated list (e.g., um, uh,
+                    er)</small>
             </div>
             <div style="margin: 12px 0;">
-                <label for="auto-stop-toggle" style="display: flex; align-items: center; gap: 8px; font-weight: normal;">
+                <label for="auto-stop-toggle"
+                    style="display: flex; align-items: center; gap: 8px; font-weight: normal;">
                     <input type="checkbox" id="auto-stop-toggle" checked>
                     Automatically stop dictation after silence
                 </label>
-                <small style="display:block; color:#666; margin-top:4px;">When off, dictation continues until you stop it manually.</small>
+                <small style="display:block; color:#666; margin-top:4px;">When off, dictation continues until you stop
+                    it manually.</small>
             </div>
             <button id="save-dictation-button">Save Dictation Settings</button>
             <p id="wake-words-status" style="color: green; margin-top: 10px;"></p>
@@ -79,41 +150,62 @@
                 <!-- ASR models will be populated dynamically -->
             </select>
         </div>
-        <button id="save-asr-model-button">Save ASR Model</button>
+        <div id="medgemma-option"
+            style="display: none; margin-top: 15px; padding: 12px; background: #f8f9fa; border-radius: 6px; border: 1px solid #e9ecef;">
+            <label for="use-medgemma-toggle"
+                style="display: flex; align-items: center; gap: 8px; font-weight: normal; cursor: pointer;">
+                <input type="checkbox" id="use-medgemma-toggle">
+                Enhance transcription with MedGemma LLM
+            </label>
+            <small style="display:block; color:#666; margin-top:6px;">
+                Runs transcription through local MedGemma model (LM Studio at 127.0.0.1:1234) to improve medical
+                terminology accuracy.
+            </small>
+        </div>
+        <button id="save-asr-model-button" style="margin-top: 15px;">Save ASR Model</button>
         <p id="asr-model-status" style="color: green; margin-top: 10px;"></p>
     </div>
 
-    <div id="section-vocabulary" class="settings-section" style="display: none; padding-right: 30px; padding-bottom: 80px;">
+    <div id="section-vocabulary" class="settings-section"
+        style="display: none; padding-right: 30px; padding-bottom: 80px;">
         <h2>Custom Vocabulary</h2>
         <p>Manage your custom vocabulary to improve transcription accuracy.</p>
-        
+
         <!-- Quick Add Term -->
         <div style="background: #f8f9fa; padding: 30px; border-radius: 8px; margin-bottom: 30px; overflow: hidden;">
             <h3 style="margin-bottom: 25px; color: #333;">Add New Term</h3>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 25px; margin-bottom: 25px;">
                 <div>
-                    <label for="new-term-correct" style="display: block; margin-bottom: 8px; font-weight: bold; color: #555;">Correct Term:</label>
-                    <input type="text" id="new-term-correct" placeholder="e.g., azithromycin" 
-                           style="width: calc(100% - 24px); padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-sizing: border-box;">
+                    <label for="new-term-correct"
+                        style="display: block; margin-bottom: 8px; font-weight: bold; color: #555;">Correct
+                        Term:</label>
+                    <input type="text" id="new-term-correct" placeholder="e.g., azithromycin"
+                        style="width: calc(100% - 24px); padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-sizing: border-box;">
                 </div>
                 <div>
-                    <label for="new-term-variations" style="display: block; margin-bottom: 8px; font-weight: bold; color: #555;">Common Mistakes:</label>
+                    <label for="new-term-variations"
+                        style="display: block; margin-bottom: 8px; font-weight: bold; color: #555;">Common
+                        Mistakes:</label>
                     <input type="text" id="new-term-variations" placeholder="e.g., as throw my sin, azthr my sin"
-                           style="width: calc(100% - 24px); padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-sizing: border-box;">
-                    <small style="color: #666; font-size: 12px; display: block; margin-top: 4px;">Separate multiple variations with commas</small>
+                        style="width: calc(100% - 24px); padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-sizing: border-box;">
+                    <small style="color: #666; font-size: 12px; display: block; margin-top: 4px;">Separate multiple
+                        variations with commas</small>
                 </div>
             </div>
             <div style="display: flex; gap: 25px; align-items: end;">
                 <div style="flex: 1;">
-                    <label for="new-term-category" style="display: block; margin-bottom: 8px; font-weight: bold; color: #555;">Category:</label>
-                    <select id="new-term-category" style="width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-sizing: border-box;">
+                    <label for="new-term-category"
+                        style="display: block; margin-bottom: 8px; font-weight: bold; color: #555;">Category:</label>
+                    <select id="new-term-category"
+                        style="width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-sizing: border-box;">
                         <option value="general">General</option>
                         <option value="medication">Medication</option>
                         <option value="medical_terms">Medical Terms</option>
                         <option value="names">Names</option>
                     </select>
                 </div>
-                <button id="add-term-button" style="background: #007bff; color: white; border: none; padding: 14px 24px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px; white-space: nowrap; min-width: 120px;">
+                <button id="add-term-button"
+                    style="background: #007bff; color: white; border: none; padding: 14px 24px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px; white-space: nowrap; min-width: 120px;">
                     Add Term
                 </button>
             </div>
@@ -123,17 +215,19 @@
         <div style="margin-bottom: 30px;">
             <h3 style="margin-bottom: 15px;">Current Vocabulary</h3>
             <div style="display: flex; justify-content: center; margin-bottom: 15px;">
-                <input type="text" id="vocab-search" placeholder="Search vocabulary..." 
-                       style="max-width: 400px; width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px;">
+                <input type="text" id="vocab-search" placeholder="Search vocabulary..."
+                    style="max-width: 400px; width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px;">
             </div>
-            
+
             <!-- Stats Summary -->
-            <div id="vocab-stats" style="background: #f0f8ff; padding: 15px; border-radius: 6px; margin-bottom: 20px; border: 1px solid #e1ecf4;">
+            <div id="vocab-stats"
+                style="background: #f0f8ff; padding: 15px; border-radius: 6px; margin-bottom: 20px; border: 1px solid #e1ecf4;">
                 <strong>Vocabulary Stats:</strong> <span id="stats-text">Loading...</span>
             </div>
-            
+
             <!-- Vocabulary List -->
-            <div id="vocabulary-list" style="max-height: 450px; overflow-y: auto; border: 1px solid #ddd; border-radius: 6px; margin-bottom: 20px;">
+            <div id="vocabulary-list"
+                style="max-height: 450px; overflow-y: auto; border: 1px solid #ddd; border-radius: 6px; margin-bottom: 20px;">
                 <div style="text-align: center; padding: 40px; color: #666;">
                     Loading vocabulary...
                 </div>
@@ -141,53 +235,65 @@
         </div>
 
         <p id="vocabulary-status" style="color: green; margin-top: 15px; margin-bottom: 30px;"></p>
-    
+
         <!-- Edit Term Modal -->
-        <div id="edit-term-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center;">
-            <div style="background: white; padding: 30px; border-radius: 8px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto;">
+        <div id="edit-term-modal"
+            style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center;">
+            <div
+                style="background: white; padding: 30px; border-radius: 8px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto;">
                 <h3 style="margin-bottom: 20px; color: #333;">Edit Vocabulary Term</h3>
-                
+
                 <div style="margin-bottom: 20px;">
-                    <label style="display: block; margin-bottom: 8px; font-weight: bold; color: #555;">Correct Term:</label>
-                    <input type="text" id="edit-term-correct" readonly 
-                           style="width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; background: #f8f9fa;">
+                    <label style="display: block; margin-bottom: 8px; font-weight: bold; color: #555;">Correct
+                        Term:</label>
+                    <input type="text" id="edit-term-correct" readonly
+                        style="width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; background: #f8f9fa;">
                 </div>
-                
+
                 <div style="margin-bottom: 20px;">
                     <label style="display: block; margin-bottom: 8px; font-weight: bold; color: #555;">Category:</label>
-                    <select id="edit-term-category" style="width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px;">
+                    <select id="edit-term-category"
+                        style="width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px;">
                         <option value="general">General</option>
                         <option value="medication">Medication</option>
                         <option value="medical_terms">Medical Terms</option>
                         <option value="names">Names</option>
                     </select>
                 </div>
-                
+
                 <div style="margin-bottom: 20px;">
-                    <label style="display: block; margin-bottom: 8px; font-weight: bold; color: #555;">Current Variations:</label>
-                    <div id="edit-variations-list" style="border: 1px solid #ddd; border-radius: 6px; padding: 15px; background: #f8f9fa; min-height: 80px; line-height: 1.5;">
+                    <label style="display: block; margin-bottom: 8px; font-weight: bold; color: #555;">Current
+                        Variations:</label>
+                    <div id="edit-variations-list"
+                        style="border: 1px solid #ddd; border-radius: 6px; padding: 15px; background: #f8f9fa; min-height: 80px; line-height: 1.5;">
                         <!-- Variations will be displayed here with delete buttons -->
                     </div>
-                    <small style="color: #666; font-size: 12px; margin-top: 4px; display: block;">Click the × button to remove a variation</small>
+                    <small style="color: #666; font-size: 12px; margin-top: 4px; display: block;">Click the × button to
+                        remove a variation</small>
                 </div>
-                
+
                 <div style="margin-bottom: 20px;">
-                    <label style="display: block; margin-bottom: 8px; font-weight: bold; color: #555;">Add New Variation:</label>
+                    <label style="display: block; margin-bottom: 8px; font-weight: bold; color: #555;">Add New
+                        Variation:</label>
                     <div style="display: flex; gap: 10px; align-items: stretch;">
                         <input type="text" id="edit-new-variation-input" placeholder="e.g., new variation"
-                               style="flex: 1; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; height: 48px; box-sizing: border-box;">
-                        <button id="add-variation-button" style="background: #28a745; color: white; border: none; padding: 12px 16px; border-radius: 6px; cursor: pointer; font-weight: 500; white-space: nowrap; height: 48px; box-sizing: border-box;">
+                            style="flex: 1; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; height: 48px; box-sizing: border-box;">
+                        <button id="add-variation-button"
+                            style="background: #28a745; color: white; border: none; padding: 12px 16px; border-radius: 6px; cursor: pointer; font-weight: 500; white-space: nowrap; height: 48px; box-sizing: border-box;">
                             Add
                         </button>
                     </div>
-                    <small style="color: #666; font-size: 12px; margin-top: 4px; display: block;">Type a variation and click Add to include it above</small>
+                    <small style="color: #666; font-size: 12px; margin-top: 4px; display: block;">Type a variation and
+                        click Add to include it above</small>
                 </div>
-                
+
                 <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                    <button id="cancel-edit-button" style="background: #6c757d; color: white; border: none; padding: 12px 20px; border-radius: 6px; cursor: pointer; font-weight: 500;">
+                    <button id="cancel-edit-button"
+                        style="background: #6c757d; color: white; border: none; padding: 12px 20px; border-radius: 6px; cursor: pointer; font-weight: 500;">
                         Cancel
                     </button>
-                    <button id="save-edit-button" style="background: #28a745; color: white; border: none; padding: 12px 20px; border-radius: 6px; cursor: pointer; font-weight: 500;">
+                    <button id="save-edit-button"
+                        style="background: #28a745; color: white; border: none; padding: 12px 20px; border-radius: 6px; cursor: pointer; font-weight: 500;">
                         Save Changes
                     </button>
                 </div>
@@ -197,4 +303,5 @@
 
     <script src="./settings_renderer.js"></script>
 </body>
+
 </html>

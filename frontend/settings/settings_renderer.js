@@ -24,6 +24,8 @@ const ASR_MODELS = [
 // ASR Model Elements
 const asrModelSelect = document.getElementById('asr-model-select');
 const saveAsrModelButton = document.getElementById('save-asr-model-button');
+const medgemmaOption = document.getElementById('medgemma-option');
+const useMedgemmaToggle = document.getElementById('use-medgemma-toggle');
 const asrModelStatus = document.getElementById('asr-model-status');
 // Wake Words Elements (Updated)
 const wakeWordsDictateInput = document.getElementById('wake-words-dictate-input');
@@ -88,6 +90,21 @@ function populateAsrModelDropdown(selectedAsrModel) {
   if (modelToSelect) {
     asrModelSelect.value = modelToSelect;
   }
+
+  // Show/hide MedGemma option based on model selection
+  updateMedgemmaVisibility();
+}
+
+function updateMedgemmaVisibility() {
+  if (asrModelSelect && medgemmaOption) {
+    const isMedAsr = asrModelSelect.value === 'google/medasr';
+    medgemmaOption.style.display = isMedAsr ? 'block' : 'none';
+  }
+}
+
+// Listen for ASR model changes
+if (asrModelSelect) {
+  asrModelSelect.addEventListener('change', updateMedgemmaVisibility);
 }
 
 
@@ -126,6 +143,11 @@ async function loadAndPopulateSettings() {
 
     // Populate ASR model dropdown
     populateAsrModelDropdown(settings.selectedAsrModel);
+
+    // Load MedGemma toggle state
+    if (useMedgemmaToggle) {
+      useMedgemmaToggle.checked = settings.useMedGemmaPostProcessing === true;
+    }
   } catch (error) {
     console.error('ERROR: Error loading settings:', error);
     if (wakeWordsStatus) {
@@ -162,8 +184,10 @@ if (saveAsrModelButton) {
         throw new Error(errorMessage);
       }
 
-      window.settingsAPI.saveSettings({ selectedAsrModel });
-      asrModelStatus.textContent = 'ASR model downloaded and saved!';
+      // Also save MedGemma toggle if MedASR is selected
+      const useMedGemmaPostProcessing = useMedgemmaToggle ? useMedgemmaToggle.checked : false;
+      window.settingsAPI.saveSettings({ selectedAsrModel, useMedGemmaPostProcessing });
+      asrModelStatus.textContent = 'ASR model settings saved!';
       asrModelStatus.style.color = 'green';
       setTimeout(() => { asrModelStatus.textContent = ''; }, 3500);
     } catch (error) {

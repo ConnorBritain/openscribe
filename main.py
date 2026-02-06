@@ -101,10 +101,10 @@ except Exception:
 # Set environment variable
 os.environ["TOKENIZERS_PARALLELISM"] = config.TOKENIZERS_PARALLELISM
 
-# Import settings manager and text processor
 from src.config.settings_manager import settings_manager
 from src.text_processor import text_processor
 from src.history.history_manager import HistoryManager
+from src import llm_postprocessor
 
 def _sanitize_for_legacy_clipboards(text: str) -> str:
     """Replace non-breaking hyphens, non-breaking spaces, smart quotes, and narrow no-break spaces.
@@ -407,6 +407,17 @@ class Application:
         
         # Apply text processing (filler word removal, etc.)
         if processed_text:
+            # Optional: Enhance with MedGemma LLM if MedASR is selected and feature is enabled
+            current_model = getattr(self.transcription_handler, "selected_asr_model", "")
+            use_llm_enhancement = settings_manager.get_setting("useMedGemmaPostProcessing", False)
+            
+            if use_llm_enhancement and current_model == "google/medasr":
+                log_text("LLM_ENHANCE", "Enhancing MedASR transcription with MedGemma...")
+                enhanced_text = llm_postprocessor.enhance_medical_transcription(processed_text)
+                if enhanced_text != processed_text:
+                    log_text("LLM_ENHANCE", f"Original: '{processed_text[:80]}...' -> Enhanced: '{enhanced_text[:80]}...'")
+                    processed_text = enhanced_text
+            
             processed_text = text_processor.clean_text(processed_text)
             
             # Log the processing if any changes were made
@@ -1009,6 +1020,12 @@ if __name__ == "__main__":
                     
                     # Apply filler word removal (same as live transcription)
                     if result_text:
+                        # Optional: Enhance with MedGemma LLM if MedASR is used
+                        use_llm_enhancement = settings_manager.get_setting("useMedGemmaPostProcessing", False)
+                        if use_llm_enhancement and model_id == "google/medasr":
+                            log_text("LLM_ENHANCE", "Enhancing retranscription with MedGemma...")
+                            result_text = llm_postprocessor.enhance_medical_transcription(result_text)
+                        
                         result_text = text_processor.clean_text(result_text)
                     
                     duration = time.time() - start_time
