@@ -162,6 +162,16 @@
                 terminology accuracy.
             </small>
         </div>
+        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #e9ecef;">
+            <label for="secondary-asr-model-select">Secondary Model (for quick re-transcribe hotkey Cmd+Shift+X):</label>
+            <select id="secondary-asr-model-select">
+                <option value="">None</option>
+                <!-- Secondary ASR models will be populated dynamically -->
+            </select>
+            <small style="display:block; color:#666; margin-top:6px;">
+                Press Cmd+Shift+X after a dictation to instantly re-transcribe with this model and auto-paste.
+            </small>
+        </div>
         <button id="save-asr-model-button" style="margin-top: 15px;">Save ASR Model</button>
         <p id="asr-model-status" style="color: green; margin-top: 10px;"></p>
     </div>

@@ -95,6 +95,9 @@ function initializeIpcHandlers() {
       if (typeof settings.autoStopOnSilence === 'boolean') {
         store.set('autoStopOnSilence', settings.autoStopOnSilence);
       }
+      if (settings.secondaryAsrModel !== undefined) {
+        store.set('secondaryAsrModel', settings.secondaryAsrModel);
+      }
       console.log('[IPC] Settings saved to store.');
 
       // Proactively push updated config to Python backend so model changes take effect immediately
@@ -111,6 +114,10 @@ function initializeIpcHandlers() {
           const savedAsrModel = store.get('selectedAsrModel');
           if (savedAsrModel) {
             configPayload.selectedAsrModel = savedAsrModel;
+          }
+          const savedSecondaryModel = store.get('secondaryAsrModel');
+          if (savedSecondaryModel) {
+            configPayload.secondaryAsrModel = savedSecondaryModel;
           }
           const msg = `CONFIG:${JSON.stringify(configPayload)}`;
           pythonShell.send(msg);
@@ -133,6 +140,7 @@ function initializeIpcHandlers() {
       fillerWords: store.get('fillerWords', []),
       autoStopOnSilence: store.get('autoStopOnSilence', true),
       wakeWordEnabled: store.get('wakeWordEnabled', true),
+      secondaryAsrModel: store.get('secondaryAsrModel', null),
       availableModels: getActualAvailableLLMs() || []
     };
     console.log('[IPC] load-settings: returning', settings);

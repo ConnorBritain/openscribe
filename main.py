@@ -182,6 +182,7 @@ class Application:
         self._last_raw_transcription = ""  # Store last raw text for clipboard
         self._current_dictation_started_at: Optional[float] = None
         self._pending_audio_bytes: Optional[bytes] = None
+        self._last_history_entry_id: Optional[str] = None
         self.history_manager = HistoryManager()
 
         # --- Initialize Handlers ---
@@ -434,6 +435,7 @@ class Application:
             "filterFillerWords": settings_manager.get_setting("filterFillerWords", True)
         }
         history_entry_id = uuid.uuid4().hex
+        self._last_history_entry_id = history_entry_id
         history_record = self.history_manager.add_entry(
             entry_id=history_entry_id,
             transcript=raw_text or "",
@@ -523,6 +525,10 @@ class Application:
             log_text("HOTKEY", "Toggle Mini Mode hotkey pressed (handled by frontend).")
             return
 
+        if command == config.COMMAND_RETRANSCRIBE_SECONDARY:
+            self._handle_retranscribe_secondary()
+            return
+
         # --- Handle commands that only work when program is active ---
         if not self._program_active:
             self._handle_status_update(
@@ -575,6 +581,67 @@ class Application:
 
         else:
             log_text("HOTKEY", f"Unhandled hotkey command: {command}")
+
+    def _handle_retranscribe_secondary(self):
+        """Re-transcribe the most recent dictation with the secondary ASR model."""
+        secondary_model = settings_manager.get_setting("secondaryAsrModel")
+        if not secondary_model:
+            self._handle_status_update("No secondary ASR model configured. Set one in Settings.", "orange")
+            return
+
+        entry_id = self._last_history_entry_id
+        if not entry_id:
+            self._handle_status_update("No recent dictation to re-transcribe.", "orange")
+            return
+
+        audio_path = os.path.join("data", "history", "audio", f"{entry_id}.wav")
+        if not os.path.exists(audio_path):
+            self._handle_status_update("Audio file not found for last dictation.", "orange")
+            return
+
+        self._handle_status_update(f"Re-transcribing with {secondary_model}...", "blue")
+
+        def retranscribe_worker():
+            try:
+                start_time = time.time()
+                result_text = self.transcription_handler.retranscribe_audio_file(audio_path, secondary_model)
+
+                if result_text:
+                    use_llm = settings_manager.get_setting("useMedGemmaPostProcessing", False)
+                    if use_llm and secondary_model == "google/medasr":
+                        result_text = llm_postprocessor.enhance_medical_transcription(result_text)
+                    result_text = text_processor.clean_text(result_text)
+
+                duration = time.time() - start_time
+
+                result_payload = {
+                    "success": True,
+                    "entryId": entry_id,
+                    "modelId": secondary_model,
+                    "transcript": result_text or "",
+                    "duration": round(duration, 2)
+                }
+                print(f"RETRANSCRIBE_QUICK_RESULT:{json.dumps(result_payload, ensure_ascii=False)}", flush=True)
+
+                if result_text:
+                    print(f"FINAL_TRANSCRIPT:{result_text}", flush=True)
+                    send_text_to_citrix(result_text + " ")
+                    self._handle_status_update("Re-transcription complete.", "green")
+                else:
+                    self._handle_status_update("Re-transcription returned empty.", "orange")
+
+            except Exception as e:
+                log_text("RETRANSCRIBE_ERROR", f"Quick retranscribe failed: {e}")
+                error_payload = {
+                    "success": False,
+                    "entryId": entry_id,
+                    "modelId": secondary_model,
+                    "error": str(e)
+                }
+                print(f"RETRANSCRIBE_QUICK_RESULT:{json.dumps(error_payload)}", flush=True)
+                self._handle_status_update(f"Re-transcription failed: {e}", "red")
+
+        threading.Thread(target=retranscribe_worker, daemon=True).start()
 
     # --- Command Handling Methods (Triggered by stdin) ---
 
@@ -840,6 +907,10 @@ if __name__ == "__main__":
                         settings_manager.set_setting("wakeWordEnabled", wake_word_enabled, save=False)
                         app.audio_handler.set_wake_word_enabled(wake_word_enabled)
                         log_text("CONFIG", f"Wake word listening enabled: {wake_word_enabled}")
+
+                    if "secondaryAsrModel" in received_config:
+                        settings_manager.set_setting("secondaryAsrModel", received_config["secondaryAsrModel"], save=False)
+                        log_text("CONFIG", f"Secondary ASR model set to: {received_config['secondaryAsrModel']}")
 
                     # Save all settings to file
                     settings_manager.save_settings()

@@ -23,6 +23,7 @@ const ASR_MODELS = [
 
 // ASR Model Elements
 const asrModelSelect = document.getElementById('asr-model-select');
+const secondaryAsrModelSelect = document.getElementById('secondary-asr-model-select');
 const saveAsrModelButton = document.getElementById('save-asr-model-button');
 const medgemmaOption = document.getElementById('medgemma-option');
 const useMedgemmaToggle = document.getElementById('use-medgemma-toggle');
@@ -95,6 +96,27 @@ function populateAsrModelDropdown(selectedAsrModel) {
   updateMedgemmaVisibility();
 }
 
+function populateSecondaryModelDropdown(secondaryAsrModel) {
+  if (!secondaryAsrModelSelect) return;
+
+  secondaryAsrModelSelect.innerHTML = '';
+  const noneOption = document.createElement('option');
+  noneOption.value = '';
+  noneOption.textContent = 'None';
+  secondaryAsrModelSelect.appendChild(noneOption);
+
+  ASR_MODELS.forEach(model => {
+    const option = document.createElement('option');
+    option.value = model.id;
+    option.textContent = model.name;
+    secondaryAsrModelSelect.appendChild(option);
+  });
+
+  if (secondaryAsrModel) {
+    secondaryAsrModelSelect.value = secondaryAsrModel;
+  }
+}
+
 function updateMedgemmaVisibility() {
   if (asrModelSelect && medgemmaOption) {
     const isMedAsr = asrModelSelect.value === 'google/medasr';
@@ -144,6 +166,9 @@ async function loadAndPopulateSettings() {
     // Populate ASR model dropdown
     populateAsrModelDropdown(settings.selectedAsrModel);
 
+    // Populate secondary ASR model dropdown
+    populateSecondaryModelDropdown(settings.secondaryAsrModel || '');
+
     // Load MedGemma toggle state
     if (useMedgemmaToggle) {
       useMedgemmaToggle.checked = settings.useMedGemmaPostProcessing === true;
@@ -186,7 +211,8 @@ if (saveAsrModelButton) {
 
       // Also save MedGemma toggle if MedASR is selected
       const useMedGemmaPostProcessing = useMedgemmaToggle ? useMedgemmaToggle.checked : false;
-      window.settingsAPI.saveSettings({ selectedAsrModel, useMedGemmaPostProcessing });
+      const secondaryAsrModel = secondaryAsrModelSelect ? secondaryAsrModelSelect.value || null : null;
+      window.settingsAPI.saveSettings({ selectedAsrModel, useMedGemmaPostProcessing, secondaryAsrModel });
       asrModelStatus.textContent = 'ASR model settings saved!';
       asrModelStatus.style.color = 'green';
       setTimeout(() => { asrModelStatus.textContent = ''; }, 3500);

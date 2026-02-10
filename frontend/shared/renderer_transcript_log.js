@@ -3,6 +3,7 @@
 // including inline vocabulary correction shortcuts.
 
 import { logMessage } from './renderer_utils.js';
+import { ASR_MODELS, getModelName } from './asr_models.js';
 
 const MAX_SELECTION_LENGTH = 140;
 
@@ -11,6 +12,8 @@ let transcripts = [];
 let activeTranscriptId = null;
 let sequenceCounter = 0;
 let heightAdjustmentCallback = null;
+let lastHistoryEntryId = null;
+let lastHistoryModel = null;
 
 // Runtime caches used for quick DOM updates without full re-render.
 let entryDomMap = new Map();
@@ -86,6 +89,138 @@ function createTranscriptToolbar(entryId) {
   return { toolbar, learnButton, learnInput, selectionPreview, feedback };
 }
 
+function createActionBar(entry) {
+  const bar = document.createElement('div');
+  bar.className = 'transcript-entry__action-bar';
+  if (entry.status !== 'complete') {
+    bar.classList.add('is-hidden');
+  }
+
+  const copyBtn = document.createElement('button');
+  copyBtn.type = 'button';
+  copyBtn.className = 'transcript-entry__action-btn';
+  copyBtn.textContent = 'Copy';
+  copyBtn.addEventListener('click', () => {
+    const text = entry.text || '';
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(text).catch(() => {});
+    }
+    copyBtn.textContent = 'Copied!';
+    setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+  });
+  bar.appendChild(copyBtn);
+
+  const retranscribeSelect = document.createElement('select');
+  retranscribeSelect.className = 'transcript-entry__retranscribe-select';
+  const defaultOpt = document.createElement('option');
+  defaultOpt.value = '';
+  defaultOpt.textContent = 'Re-transcribe \u25BE';
+  defaultOpt.disabled = true;
+  defaultOpt.selected = true;
+  retranscribeSelect.appendChild(defaultOpt);
+
+  ASR_MODELS.forEach((model) => {
+    if (model.id === entry.historyModel) return;
+    const opt = document.createElement('option');
+    opt.value = model.id;
+    opt.textContent = model.name;
+    retranscribeSelect.appendChild(opt);
+  });
+
+  if (!entry.historyId) {
+    retranscribeSelect.disabled = true;
+    retranscribeSelect.title = 'No audio available for re-transcription';
+  }
+
+  retranscribeSelect.addEventListener('change', () => {
+    const modelId = retranscribeSelect.value;
+    if (!modelId || !entry.historyId) return;
+    handleRetranscribeRequest(entry, modelId);
+    retranscribeSelect.value = '';
+  });
+
+  bar.appendChild(retranscribeSelect);
+
+  const retranscribeStatus = document.createElement('span');
+  retranscribeStatus.className = 'transcript-entry__retranscribe-status';
+  bar.appendChild(retranscribeStatus);
+
+  return { actionBar: bar, retranscribeSelect, retranscribeStatus };
+}
+
+function handleRetranscribeRequest(entry, modelId) {
+  const entryInfo = entryDomMap.get(entry.id);
+  if (!entryInfo) return;
+
+  const { retranscribeStatus, retranscribeSelect } = entryInfo;
+  retranscribeSelect.disabled = true;
+  retranscribeStatus.textContent = `Re-transcribing with ${getModelName(modelId)}...`;
+  retranscribeStatus.className = 'transcript-entry__retranscribe-status';
+
+  if (!entry.originalText) {
+    entry.originalText = entry.text;
+  }
+
+  const retranscribeApi = window.electronAPI && window.electronAPI.retranscribe;
+  if (typeof retranscribeApi !== 'function') {
+    retranscribeStatus.textContent = 'Re-transcribe not available.';
+    retranscribeStatus.classList.add('is-error');
+    retranscribeSelect.disabled = false;
+    return;
+  }
+
+  retranscribeApi(entry.historyId, modelId)
+    .then((result) => {
+      if (result && result.success) {
+        entry.text = result.transcript;
+        entry.historyModel = modelId;
+        entry.updatedAt = new Date();
+        if (entryInfo.textBlock) {
+          entryInfo.textBlock.textContent = result.transcript;
+        }
+        if (entryInfo.timestamp) {
+          entryInfo.timestamp.textContent = formatTimestamp(entry.updatedAt);
+        }
+        retranscribeStatus.textContent = `Re-transcribed with ${getModelName(modelId)} (${result.duration}s)`;
+        retranscribeStatus.className = 'transcript-entry__retranscribe-status is-success';
+
+        // Rebuild dropdown to exclude the new model
+        rebuildRetranscribeOptions(retranscribeSelect, modelId);
+      } else {
+        retranscribeStatus.textContent = `Failed: ${result?.error || 'Unknown error'}`;
+        retranscribeStatus.classList.add('is-error');
+      }
+    })
+    .catch((error) => {
+      retranscribeStatus.textContent = `Failed: ${error?.message || error}`;
+      retranscribeStatus.classList.add('is-error');
+    })
+    .finally(() => {
+      retranscribeSelect.disabled = false;
+      if (typeof heightAdjustmentCallback === 'function') {
+        heightAdjustmentCallback();
+      }
+    });
+}
+
+function rebuildRetranscribeOptions(select, currentModelId) {
+  select.innerHTML = '';
+  const defaultOpt = document.createElement('option');
+  defaultOpt.value = '';
+  defaultOpt.textContent = 'Re-transcribe \u25BE';
+  defaultOpt.disabled = true;
+  defaultOpt.selected = true;
+  select.appendChild(defaultOpt);
+
+  ASR_MODELS.forEach((model) => {
+    if (model.id === currentModelId) return;
+    const opt = document.createElement('option');
+    opt.value = model.id;
+    opt.textContent = model.name;
+    select.appendChild(opt);
+  });
+}
+
 function buildTranscriptEntry(entry) {
   const entryEl = document.createElement('article');
   entryEl.className = 'transcript-entry';
@@ -110,6 +245,9 @@ function buildTranscriptEntry(entry) {
   textBlock.textContent = entry.text || (entry.status === 'recording' ? 'Capturing audio…' : '');
   entryEl.appendChild(textBlock);
 
+  const { actionBar, retranscribeSelect, retranscribeStatus } = createActionBar(entry);
+  entryEl.appendChild(actionBar);
+
   const metaFooter = document.createElement('div');
   metaFooter.className = 'transcript-entry__footer';
   metaFooter.textContent = entry.status === 'complete'
@@ -125,6 +263,9 @@ function buildTranscriptEntry(entry) {
     textBlock,
     statusBadge,
     timestampEl,
+    actionBar,
+    retranscribeSelect,
+    retranscribeStatus,
     toolbar,
     learnButton,
     learnInput,
@@ -173,6 +314,9 @@ function renderTranscripts() {
         textBlock,
         statusBadge,
         timestampEl,
+        actionBar,
+        retranscribeSelect,
+        retranscribeStatus,
         toolbar,
         learnButton,
         learnInput,
@@ -187,6 +331,9 @@ function renderTranscripts() {
         textBlock,
         statusBadge,
         timestamp: timestampEl,
+        actionBar,
+        retranscribeSelect,
+        retranscribeStatus,
         toolbar,
         learnButton,
         learnInput,
@@ -552,4 +699,77 @@ export function resetTranscriptLog() {
   transcripts = [];
   activeTranscriptId = null;
   renderTranscripts();
+}
+
+export function setLastHistoryEntry(entryData) {
+  if (!entryData || !entryData.id) return;
+  lastHistoryEntryId = entryData.id;
+  lastHistoryModel = entryData.metadata?.model || null;
+
+  // Attach history info to the most recent completed transcript
+  const recentEntry = transcripts.find((t) => t.status === 'complete');
+  if (recentEntry) {
+    recentEntry.historyId = entryData.id;
+    recentEntry.historyModel = lastHistoryModel;
+    // Re-render to update the action bar (enable retranscribe dropdown)
+    const domEntry = entryDomMap.get(recentEntry.id);
+    if (domEntry && domEntry.retranscribeSelect) {
+      domEntry.retranscribeSelect.disabled = false;
+      domEntry.retranscribeSelect.title = '';
+    }
+    if (domEntry && domEntry.actionBar) {
+      domEntry.actionBar.classList.remove('is-hidden');
+    }
+  }
+  logMessage(`[TranscriptLog] History entry linked: ${entryData.id} (model: ${lastHistoryModel})`);
+}
+
+export function getLastHistoryId() {
+  return lastHistoryEntryId;
+}
+
+export function handleQuickRetranscribeResult(resultData) {
+  if (!resultData) return;
+
+  // Find the most recent completed transcript to update
+  const recentEntry = transcripts.find((t) => t.status === 'complete');
+  if (!recentEntry) {
+    logMessage('[TranscriptLog] No completed transcript to update with quick retranscribe result.');
+    return;
+  }
+
+  const domEntry = entryDomMap.get(recentEntry.id);
+  if (!domEntry) return;
+
+  if (resultData.success) {
+    if (!recentEntry.originalText) {
+      recentEntry.originalText = recentEntry.text;
+    }
+    recentEntry.text = resultData.transcript;
+    recentEntry.historyModel = resultData.modelId;
+    recentEntry.updatedAt = new Date();
+
+    if (domEntry.textBlock) {
+      domEntry.textBlock.textContent = resultData.transcript;
+    }
+    if (domEntry.timestamp) {
+      domEntry.timestamp.textContent = formatTimestamp(recentEntry.updatedAt);
+    }
+    if (domEntry.retranscribeStatus) {
+      domEntry.retranscribeStatus.textContent = `Re-transcribed with ${getModelName(resultData.modelId)} (${resultData.duration}s)`;
+      domEntry.retranscribeStatus.className = 'transcript-entry__retranscribe-status is-success';
+    }
+    if (domEntry.retranscribeSelect) {
+      rebuildRetranscribeOptions(domEntry.retranscribeSelect, resultData.modelId);
+    }
+  } else {
+    if (domEntry.retranscribeStatus) {
+      domEntry.retranscribeStatus.textContent = `Quick re-transcribe failed: ${resultData.error || 'Unknown error'}`;
+      domEntry.retranscribeStatus.className = 'transcript-entry__retranscribe-status is-error';
+    }
+  }
+
+  if (typeof heightAdjustmentCallback === 'function') {
+    heightAdjustmentCallback();
+  }
 }

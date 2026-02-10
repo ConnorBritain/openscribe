@@ -8,7 +8,9 @@ import {
   beginTranscriptSession,
   updateActiveTranscriptStatus,
   finalizeActiveTranscript,
-  setTranscriptHeightCallback
+  setTranscriptHeightCallback,
+  setLastHistoryEntry,
+  handleQuickRetranscribeResult
 } from './renderer_transcript_log.js';
 
 const MIN_WINDOW_HEIGHT = 124;
@@ -197,6 +199,20 @@ export function registerIPCHandlers() {
           if (amplitudes.length > 100) {
             amplitudes.shift();
           }
+        }
+      } else if (message.startsWith('HISTORY_ENTRY:')) {
+        try {
+          const entryData = JSON.parse(message.substring(14));
+          setLastHistoryEntry(entryData);
+        } catch (error) {
+          logMessage(`Error parsing HISTORY_ENTRY JSON: ${error}`, 'error');
+        }
+      } else if (message.startsWith('RETRANSCRIBE_QUICK_RESULT:')) {
+        try {
+          const resultData = JSON.parse(message.substring(26));
+          handleQuickRetranscribeResult(resultData);
+        } catch (error) {
+          logMessage(`Error parsing RETRANSCRIBE_QUICK_RESULT JSON: ${error}`, 'error');
         }
       } else if (message.startsWith('HOTKEYS:')) {
         logMessage(`Received Hotkeys: ${message.substring(8)}`);

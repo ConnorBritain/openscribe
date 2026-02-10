@@ -35,6 +35,7 @@ class SettingsManager:
             "fillerWords": ["um", "uh", "ah", "er", "hmm", "mm", "mhm"],  # Default filler words
             "autoStopOnSilence": True,  # Automatically stop dictation after sustained silence
             "useMedGemmaPostProcessing": False,  # Optional LLM post-processing for MedASR
+            "secondaryAsrModel": None,  # Secondary model for quick re-transcribe hotkey
         }
     
     def load_settings(self) -> Dict[str, Any]:

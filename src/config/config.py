@@ -126,6 +126,7 @@ COMMAND_ABORT_DICTATE = "abort_dictate"  # Added for abort/cancel hotkey
 COMMAND_RESTART = "restart"
 COMMAND_SHOW_HOTKEYS = "show_hotkeys"
 COMMAND_TOGGLE_MINI_MODE = "toggle_mini_mode"  # Added for mini mode toggle
+COMMAND_RETRANSCRIBE_SECONDARY = "retranscribe_secondary"
 
 # --- Wake Words ---
 # Define words for different activation commands
@@ -145,6 +146,7 @@ HOTKEY_COMBINATIONS = {
     frozenset({Key.cmd, Key.shift, KeyCode.from_char("r")}): COMMAND_RESTART,
     frozenset({Key.cmd, Key.shift, KeyCode.from_char("h")}): COMMAND_SHOW_HOTKEYS,
     frozenset({Key.cmd, Key.shift, KeyCode.from_char("m")}): COMMAND_TOGGLE_MINI_MODE,
+    frozenset({Key.cmd, Key.shift, KeyCode.from_char("x")}): COMMAND_RETRANSCRIBE_SECONDARY,
 }
 
 # --- GUI ---

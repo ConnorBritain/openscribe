@@ -33,6 +33,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Call vocabulary API commands (e.g., learn corrections)
   vocabularyApi: (command, data = {}) => ipcRenderer.invoke('vocabulary-api', command, data),
 
+  // Re-transcribe a history entry with a different ASR model
+  retranscribe: (entryId, modelId) => ipcRenderer.invoke('history:retranscribe', entryId, modelId),
+
   // Clean up listeners when they are no longer needed (important!)
   removeListener: (channel) => ipcRenderer.removeAllListeners(channel),
 
