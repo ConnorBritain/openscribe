@@ -2,7 +2,7 @@
 // Handles IPC communication with Electron main and Python backend
 
 import { logMessage } from './renderer_utils.js';
-import { updateStatusIndicator, handleStatusMessage } from './renderer_state.js';
+import { updateStatusIndicator, handleStatusMessage, showRetranscribeProgress, hideRetranscribeProgress } from './renderer_state.js';
 import { amplitudes } from './renderer_ui.js';
 import {
   beginTranscriptSession,
@@ -10,7 +10,8 @@ import {
   finalizeActiveTranscript,
   setTranscriptHeightCallback,
   setLastHistoryEntry,
-  handleQuickRetranscribeResult
+  handleQuickRetranscribeResult,
+  setRetranscribingState
 } from './renderer_transcript_log.js';
 
 const MIN_WINDOW_HEIGHT = 124;
@@ -207,6 +208,17 @@ export function registerIPCHandlers() {
         } catch (error) {
           logMessage(`Error parsing HISTORY_ENTRY JSON: ${error}`, 'error');
         }
+      } else if (message.startsWith('RETRANSCRIBE_START:')) {
+        const payload = message.substring(19);
+        if (payload.startsWith('error:')) {
+          showRetranscribeProgress(payload.substring(6), true);
+        } else {
+          showRetranscribeProgress(payload, false);
+          setRetranscribingState(true);
+        }
+      } else if (message.startsWith('RETRANSCRIBE_END:')) {
+        hideRetranscribeProgress();
+        setRetranscribingState(false);
       } else if (message.startsWith('RETRANSCRIBE_QUICK_RESULT:')) {
         try {
           const resultData = JSON.parse(message.substring(26));

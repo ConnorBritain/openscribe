@@ -103,7 +103,7 @@ function createActionBar(entry) {
   copyBtn.addEventListener('click', () => {
     const text = entry.text || '';
     if (navigator.clipboard) {
-      navigator.clipboard.writeText(text).catch(() => {});
+      navigator.clipboard.writeText(text).catch(() => { });
     }
     copyBtn.textContent = 'Copied!';
     setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
@@ -686,9 +686,23 @@ export function updateActiveTranscriptText(text, { finalize = false } = {}) {
   entry.updatedAt = new Date();
   if (finalize) {
     entry.status = 'complete';
+    // If this transcript hasn't been linked to a history entry yet,
+    // link the most recent unclaimed history entry now.
+    if (!entry.historyId && lastHistoryEntryId) {
+      entry.historyId = lastHistoryEntryId;
+      entry.historyModel = lastHistoryModel;
+    }
     activeTranscriptId = null;
   }
   renderTranscripts();
+  // After render, ensure the re-transcribe dropdown is enabled if history is linked
+  if (finalize && entry.historyId) {
+    const domEntry = entryDomMap.get(entry.id);
+    if (domEntry && domEntry.retranscribeSelect) {
+      domEntry.retranscribeSelect.disabled = false;
+      domEntry.retranscribeSelect.title = '';
+    }
+  }
 }
 
 export function finalizeActiveTranscript(text) {
@@ -706,8 +720,11 @@ export function setLastHistoryEntry(entryData) {
   lastHistoryEntryId = entryData.id;
   lastHistoryModel = entryData.metadata?.model || null;
 
-  // Attach history info to the most recent completed transcript
-  const recentEntry = transcripts.find((t) => t.status === 'complete');
+  // Attach history info to the most recent completed transcript.
+  // Fall back to the active transcript if it hasn't been finalized yet
+  // (guards against HISTORY_ENTRY arriving before FINAL_TRANSCRIPT).
+  const recentEntry = transcripts.find((t) => t.status === 'complete')
+    || (activeTranscriptId && transcripts.find((t) => t.id === activeTranscriptId));
   if (recentEntry) {
     recentEntry.historyId = entryData.id;
     recentEntry.historyModel = lastHistoryModel;
@@ -731,6 +748,8 @@ export function getLastHistoryId() {
 export function handleQuickRetranscribeResult(resultData) {
   if (!resultData) return;
 
+  const isAutoTriggered = !!resultData.autoTriggered;
+
   // Find the most recent completed transcript to update
   const recentEntry = transcripts.find((t) => t.status === 'complete');
   if (!recentEntry) {
@@ -742,34 +761,110 @@ export function handleQuickRetranscribeResult(resultData) {
   if (!domEntry) return;
 
   if (resultData.success) {
-    if (!recentEntry.originalText) {
-      recentEntry.originalText = recentEntry.text;
-    }
-    recentEntry.text = resultData.transcript;
-    recentEntry.historyModel = resultData.modelId;
-    recentEntry.updatedAt = new Date();
+    if (isAutoTriggered) {
+      // Auto-triggered: show alternative without replacing text
+      if (!recentEntry.originalText) {
+        recentEntry.originalText = recentEntry.text;
+      }
+      // Store the alternative but don't swap text yet
+      recentEntry.alternativeText = resultData.transcript;
+      recentEntry.alternativeModel = resultData.modelId;
 
-    if (domEntry.textBlock) {
-      domEntry.textBlock.textContent = resultData.transcript;
-    }
-    if (domEntry.timestamp) {
-      domEntry.timestamp.textContent = formatTimestamp(recentEntry.updatedAt);
-    }
-    if (domEntry.retranscribeStatus) {
-      domEntry.retranscribeStatus.textContent = `Re-transcribed with ${getModelName(resultData.modelId)} (${resultData.duration}s)`;
-      domEntry.retranscribeStatus.className = 'transcript-entry__retranscribe-status is-success';
-    }
-    if (domEntry.retranscribeSelect) {
-      rebuildRetranscribeOptions(domEntry.retranscribeSelect, resultData.modelId);
+      if (domEntry.retranscribeStatus) {
+        // Clear any prior content
+        domEntry.retranscribeStatus.innerHTML = '';
+
+        const label = document.createElement('span');
+        label.textContent = `Alternative ready (${getModelName(resultData.modelId)}, ${resultData.duration}s)`;
+        domEntry.retranscribeStatus.appendChild(label);
+
+        const useBtn = document.createElement('button');
+        useBtn.type = 'button';
+        useBtn.className = 'transcript-entry__use-alt-btn';
+        useBtn.textContent = 'Use this';
+        useBtn.addEventListener('click', () => {
+          // Swap the text
+          recentEntry.text = resultData.transcript;
+          recentEntry.historyModel = resultData.modelId;
+          recentEntry.updatedAt = new Date();
+          if (domEntry.textBlock) {
+            domEntry.textBlock.textContent = resultData.transcript;
+          }
+          if (domEntry.timestamp) {
+            domEntry.timestamp.textContent = formatTimestamp(recentEntry.updatedAt);
+          }
+          // Re-paste via clipboard
+          if (window.electronAPI && typeof window.electronAPI.repaste === 'function') {
+            window.electronAPI.repaste(resultData.transcript);
+          }
+          // Update status
+          domEntry.retranscribeStatus.innerHTML = '';
+          domEntry.retranscribeStatus.textContent = `Switched to ${getModelName(resultData.modelId)}`;
+          domEntry.retranscribeStatus.className = 'transcript-entry__retranscribe-status is-success';
+          if (domEntry.retranscribeSelect) {
+            rebuildRetranscribeOptions(domEntry.retranscribeSelect, resultData.modelId);
+          }
+          if (typeof heightAdjustmentCallback === 'function') {
+            heightAdjustmentCallback();
+          }
+        });
+        domEntry.retranscribeStatus.appendChild(useBtn);
+
+        domEntry.retranscribeStatus.className = 'transcript-entry__retranscribe-status is-alt-ready';
+      }
+    } else {
+      // Manual trigger: replace text immediately (existing behavior)
+      if (!recentEntry.originalText) {
+        recentEntry.originalText = recentEntry.text;
+      }
+      recentEntry.text = resultData.transcript;
+      recentEntry.historyModel = resultData.modelId;
+      recentEntry.updatedAt = new Date();
+
+      if (domEntry.textBlock) {
+        domEntry.textBlock.textContent = resultData.transcript;
+      }
+      if (domEntry.timestamp) {
+        domEntry.timestamp.textContent = formatTimestamp(recentEntry.updatedAt);
+      }
+      if (domEntry.retranscribeStatus) {
+        domEntry.retranscribeStatus.textContent = `Re-transcribed with ${getModelName(resultData.modelId)} (${resultData.duration}s)`;
+        domEntry.retranscribeStatus.className = 'transcript-entry__retranscribe-status is-success';
+      }
+      if (domEntry.retranscribeSelect) {
+        rebuildRetranscribeOptions(domEntry.retranscribeSelect, resultData.modelId);
+      }
     }
   } else {
     if (domEntry.retranscribeStatus) {
-      domEntry.retranscribeStatus.textContent = `Quick re-transcribe failed: ${resultData.error || 'Unknown error'}`;
+      const prefix = isAutoTriggered ? 'Background re-transcribe failed' : 'Quick re-transcribe failed';
+      domEntry.retranscribeStatus.textContent = `${prefix}: ${resultData.error || 'Unknown error'}`;
       domEntry.retranscribeStatus.className = 'transcript-entry__retranscribe-status is-error';
     }
   }
 
   if (typeof heightAdjustmentCallback === 'function') {
     heightAdjustmentCallback();
+  }
+}
+
+/**
+ * Toggle visual feedback on the most recent transcript entry during re-transcription.
+ * @param {boolean} active  True to show shimmer, false to remove it.
+ */
+export function setRetranscribingState(active) {
+  const recentEntry = transcripts.find((t) => t.status === 'complete');
+  if (!recentEntry) return;
+  const domEntry = entryDomMap.get(recentEntry.id);
+  if (!domEntry || !domEntry.entryEl) return;
+
+  if (active) {
+    domEntry.entryEl.classList.add('is-retranscribing');
+    if (domEntry.retranscribeStatus) {
+      domEntry.retranscribeStatus.textContent = 'Re-transcribing...';
+      domEntry.retranscribeStatus.className = 'transcript-entry__retranscribe-status';
+    }
+  } else {
+    domEntry.entryEl.classList.remove('is-retranscribing');
   }
 }

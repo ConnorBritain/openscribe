@@ -183,6 +183,9 @@ class Application:
         self._current_dictation_started_at: Optional[float] = None
         self._pending_audio_bytes: Optional[bytes] = None
         self._last_history_entry_id: Optional[str] = None
+        self._bg_retranscribe_cancel = threading.Event()
+        self._bg_retranscribe_thread: Optional[threading.Thread] = None
+        self._bg_retranscribe_result: Optional[Dict[str, Any]] = None
         self.history_manager = HistoryManager()
 
         # --- Initialize Handlers ---
@@ -356,6 +359,10 @@ class Application:
             return
 
         if command == config.COMMAND_START_DICTATE:
+            # Cancel any in-flight background retranscription
+            self._bg_retranscribe_cancel.set()
+            self._bg_retranscribe_result = None
+
             self._current_processing_mode = "dictate"
             self._handle_status_update("Dictation started.", "green")
             self._current_dictation_started_at = time.time()
@@ -448,9 +455,9 @@ class Application:
         )
         self._pending_audio_bytes = None
         self._current_dictation_started_at = None
-        print(f"HISTORY_ENTRY:{json.dumps(history_record, ensure_ascii=False)}", flush=True)
 
-        # Send transcription to Electron
+        # Send transcription to Electron BEFORE history entry so the frontend
+        # finalizes the transcript (status → 'complete') before linking history.
         if processed_text:
             print(f"FINAL_TRANSCRIPT:{processed_text}", flush=True)
             self._handle_status_update("Sending to Citrix...", "blue")
@@ -461,11 +468,21 @@ class Application:
             # Empty transcription - always finish
             self._handle_status_update("Transcription returned empty.", "orange")
 
+        # Send history entry AFTER transcript so setLastHistoryEntry() finds the
+        # correct (just-finalized) entry when linking.
+        print(f"HISTORY_ENTRY:{json.dumps(history_record, ensure_ascii=False)}", flush=True)
+
         # Reset state and return to listening
         self._current_processing_mode = None
         self.hotkey_manager.set_dictating_state(False)
         self.audio_handler.set_listening_state("activation")
         self._update_app_state()
+
+        # Auto-trigger background retranscription with secondary model if configured
+        secondary_model = settings_manager.get_setting("secondaryAsrModel")
+        primary_model = getattr(self.transcription_handler, "selected_asr_model", "")
+        if secondary_model and secondary_model != primary_model and history_entry_id and processed_text:
+            self._start_background_retranscribe(history_entry_id, secondary_model)
 
     def _convert_audio_to_wav(self, audio_data):
         if audio_data is None:
@@ -526,7 +543,13 @@ class Application:
             return
 
         if command == config.COMMAND_RETRANSCRIBE_SECONDARY:
-            self._handle_retranscribe_secondary()
+            try:
+                self._handle_retranscribe_secondary()
+            except Exception as e:
+                log_text("RETRANSCRIBE_ERROR", f"Unexpected error in retranscribe handler: {e}")
+                print(f"RETRANSCRIBE_START:error:Re-transcribe failed: {e}", flush=True)
+                print("RETRANSCRIBE_END:error", flush=True)
+                self._handle_status_update(f"Re-transcribe error: {e}", "red")
             return
 
         # --- Handle commands that only work when program is active ---
@@ -583,22 +606,50 @@ class Application:
             log_text("HOTKEY", f"Unhandled hotkey command: {command}")
 
     def _handle_retranscribe_secondary(self):
-        """Re-transcribe the most recent dictation with the secondary ASR model."""
+        """Re-transcribe the most recent dictation with the secondary ASR model.
+
+        If a background retranscription has already completed, use the cached result
+        immediately instead of re-running the model.
+        """
         secondary_model = settings_manager.get_setting("secondaryAsrModel")
         if not secondary_model:
+            print("RETRANSCRIBE_START:error:No secondary ASR model configured. Set one in Settings.", flush=True)
+            print("RETRANSCRIBE_END:error", flush=True)
             self._handle_status_update("No secondary ASR model configured. Set one in Settings.", "orange")
+            return
+
+        # Check if background retranscription already has a cached result
+        cached = self._bg_retranscribe_result
+        if cached and cached.get("success") and cached.get("transcript"):
+            log_text("RETRANSCRIBE", "Using cached background retranscribe result")
+            result_text = cached["transcript"]
+            print(f"RETRANSCRIBE_START:{cached.get('modelId', secondary_model)}", flush=True)
+            print("RETRANSCRIBE_END:success", flush=True)
+            # Re-emit as a non-auto result so frontend auto-pastes
+            manual_payload = dict(cached)
+            manual_payload["autoTriggered"] = False
+            print(f"RETRANSCRIBE_QUICK_RESULT:{json.dumps(manual_payload, ensure_ascii=False)}", flush=True)
+            print(f"FINAL_TRANSCRIPT:{result_text}", flush=True)
+            send_text_to_citrix(result_text + " ")
+            self._handle_status_update("Re-transcription complete (cached).", "green")
+            self._bg_retranscribe_result = None
             return
 
         entry_id = self._last_history_entry_id
         if not entry_id:
+            print("RETRANSCRIBE_START:error:No recent dictation to re-transcribe.", flush=True)
+            print("RETRANSCRIBE_END:error", flush=True)
             self._handle_status_update("No recent dictation to re-transcribe.", "orange")
             return
 
         audio_path = os.path.join("data", "history", "audio", f"{entry_id}.wav")
         if not os.path.exists(audio_path):
+            print("RETRANSCRIBE_START:error:Audio file not found for last dictation.", flush=True)
+            print("RETRANSCRIBE_END:error", flush=True)
             self._handle_status_update("Audio file not found for last dictation.", "orange")
             return
 
+        print(f"RETRANSCRIBE_START:{secondary_model}", flush=True)
         self._handle_status_update(f"Re-transcribing with {secondary_model}...", "blue")
 
         def retranscribe_worker():
@@ -621,6 +672,7 @@ class Application:
                     "transcript": result_text or "",
                     "duration": round(duration, 2)
                 }
+                print("RETRANSCRIBE_END:success", flush=True)
                 print(f"RETRANSCRIBE_QUICK_RESULT:{json.dumps(result_payload, ensure_ascii=False)}", flush=True)
 
                 if result_text:
@@ -638,10 +690,82 @@ class Application:
                     "modelId": secondary_model,
                     "error": str(e)
                 }
+                print("RETRANSCRIBE_END:error", flush=True)
                 print(f"RETRANSCRIBE_QUICK_RESULT:{json.dumps(error_payload)}", flush=True)
                 self._handle_status_update(f"Re-transcription failed: {e}", "red")
 
         threading.Thread(target=retranscribe_worker, daemon=True).start()
+
+    def _start_background_retranscribe(self, entry_id: str, secondary_model: str):
+        """Spawn a background thread to retranscribe with the secondary model."""
+        # Cancel any prior in-flight background job
+        self._bg_retranscribe_cancel.set()
+        self._bg_retranscribe_result = None
+
+        # Clear the event for the new job
+        self._bg_retranscribe_cancel = threading.Event()
+        cancel_event = self._bg_retranscribe_cancel
+
+        audio_path = os.path.join("data", "history", "audio", f"{entry_id}.wav")
+        if not os.path.exists(audio_path):
+            log_text("BG_RETRANSCRIBE", f"Audio file not found, skipping background retranscribe: {audio_path}")
+            return
+
+        def bg_worker():
+            try:
+                if cancel_event.is_set():
+                    return
+
+                log_text("BG_RETRANSCRIBE", f"Starting background retranscribe with {secondary_model}")
+                start_time = time.time()
+                result_text = self.transcription_handler.retranscribe_audio_file(audio_path, secondary_model)
+
+                if cancel_event.is_set():
+                    log_text("BG_RETRANSCRIBE", "Cancelled after transcription completed")
+                    return
+
+                if result_text:
+                    use_llm = settings_manager.get_setting("useMedGemmaPostProcessing", False)
+                    if use_llm and secondary_model == "google/medasr":
+                        result_text = llm_postprocessor.enhance_medical_transcription(result_text)
+                    result_text = text_processor.clean_text(result_text)
+
+                duration = time.time() - start_time
+
+                if cancel_event.is_set():
+                    return
+
+                result_payload = {
+                    "success": True,
+                    "entryId": entry_id,
+                    "modelId": secondary_model,
+                    "transcript": result_text or "",
+                    "duration": round(duration, 2),
+                    "autoTriggered": True
+                }
+
+                # Cache the result so Cmd+Shift+X can use it immediately
+                self._bg_retranscribe_result = result_payload
+
+                print(f"RETRANSCRIBE_QUICK_RESULT:{json.dumps(result_payload, ensure_ascii=False)}", flush=True)
+                log_text("BG_RETRANSCRIBE", f"Background retranscribe complete in {duration:.2f}s")
+
+            except Exception as e:
+                if cancel_event.is_set():
+                    return
+                log_text("BG_RETRANSCRIBE_ERROR", f"Background retranscribe failed: {e}")
+                error_payload = {
+                    "success": False,
+                    "entryId": entry_id,
+                    "modelId": secondary_model,
+                    "error": str(e),
+                    "autoTriggered": True
+                }
+                print(f"RETRANSCRIBE_QUICK_RESULT:{json.dumps(error_payload)}", flush=True)
+
+        thread = threading.Thread(target=bg_worker, daemon=True)
+        self._bg_retranscribe_thread = thread
+        thread.start()
 
     # --- Command Handling Methods (Triggered by stdin) ---
 
@@ -1046,6 +1170,14 @@ if __name__ == "__main__":
                     print(f"MODEL_ERROR:{request_id}:{json.dumps(error_payload)}", flush=True)
                     sys.stdout.flush()
                     log_text("COMMAND_ERROR", f"Failed to ensure model {repo_id}: {ensure_err}")
+
+            elif command_line.startswith("REPASTE:"):
+                repaste_text = command_line[len("REPASTE:"):]
+                if repaste_text:
+                    log_text("REPASTE", f"Re-pasting text: {repaste_text[:50]}...")
+                    send_text_to_citrix(repaste_text + " ")
+                else:
+                    log_text("REPASTE", "Empty repaste text, ignoring.")
 
             elif command_line == "start_dictate":
                 app._handle_hotkey(config.COMMAND_START_DICTATE)

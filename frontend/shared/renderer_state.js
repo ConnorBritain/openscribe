@@ -140,39 +140,39 @@ export function updateStatusIndicator(newState) {
   if (processingIndicator) processingIndicator.style.display = 'none';
 
   switch (effectiveVisibleAudioState) {
-  case 'activation':
-  case 'preparing':
-    if (internalState.wakeWordEnabled) {
-      applyStatusDotVisuals('blue', 'listening');
-    } else {
+    case 'activation':
+    case 'preparing':
+      if (internalState.wakeWordEnabled) {
+        applyStatusDotVisuals('blue', 'listening');
+      } else {
+        applyStatusDotVisuals('grey', 'inactive');
+      }
+      if (stopButton) stopButton.disabled = true;
+      if (cancelButton) cancelButton.disabled = true;
+      break;
+    case 'dictation':
+      applyStatusDotVisuals('green', 'dictation');
+      if (stopButton) stopButton.disabled = false;
+      if (cancelButton) cancelButton.disabled = false;
+      if (modeIndicator && internalState.currentMode === 'dictate') {
+        modeIndicator.textContent = 'Note';
+        modeIndicator.style.display = 'inline-block';
+      }
+      break;
+    case 'processing':
+      applyStatusDotVisuals('orange', 'inactive');
+      if (stopButton) stopButton.disabled = true;
+      if (cancelButton) cancelButton.disabled = true;
+      if (processingIndicator) processingIndicator.style.display = 'inline-block';
+      break;
+    case 'inactive':
+    default:
       applyStatusDotVisuals('grey', 'inactive');
-    }
-    if (stopButton) stopButton.disabled = true;
-    if (cancelButton) cancelButton.disabled = true;
-    break;
-  case 'dictation':
-    applyStatusDotVisuals('green', 'dictation');
-    if (stopButton) stopButton.disabled = false;
-    if (cancelButton) cancelButton.disabled = false;
-    if (modeIndicator && internalState.currentMode === 'dictate') {
-      modeIndicator.textContent = 'Note';
-      modeIndicator.style.display = 'inline-block';
-    }
-    break;
-  case 'processing':
-    applyStatusDotVisuals('orange', 'inactive');
-    if (stopButton) stopButton.disabled = true;
-    if (cancelButton) cancelButton.disabled = true;
-    if (processingIndicator) processingIndicator.style.display = 'inline-block';
-    break;
-  case 'inactive':
-  default:
-    applyStatusDotVisuals('grey', 'inactive');
-    if (stopButton) stopButton.disabled = true;
-    if (cancelButton) cancelButton.disabled = true;
-    if (modeIndicator) modeIndicator.style.display = 'none';
-    if (processingIndicator) processingIndicator.style.display = 'none';
-    break;
+      if (stopButton) stopButton.disabled = true;
+      if (cancelButton) cancelButton.disabled = true;
+      if (modeIndicator) modeIndicator.style.display = 'none';
+      if (processingIndicator) processingIndicator.style.display = 'none';
+      break;
   }
 
   updateWakeWordToggle(internalState.wakeWordEnabled, internalState.programActive);
@@ -230,8 +230,8 @@ export function handleStatusMessage(statusText, color) {
 
   const isBrowserConflictMessage = statusText.toLowerCase().includes('microphone conflict detected') &&
     (statusText.toLowerCase().includes('safari') ||
-     statusText.toLowerCase().includes('chrome') ||
-     statusText.toLowerCase().includes('browser'));
+      statusText.toLowerCase().includes('chrome') ||
+      statusText.toLowerCase().includes('browser'));
 
   const isSuggestionMessage = statusText.includes('💡') ||
     statusText.toLowerCase().includes('note:') ||
@@ -286,4 +286,51 @@ export function hideConflictNotification() {
 
 export function isConflictNotificationVisible() {
   return conflictNotificationManager.isConflictVisible();
+}
+
+/**
+ * Show a pulsing spinner and processing indicator during re-transcription.
+ * @param {string} modelName  The model being used, or an error message.
+ * @param {boolean} isError   True if this is an error flash (will auto-hide).
+ */
+export function showRetranscribeProgress(modelName, isError = false) {
+  const dot = resolveStatusDot();
+  if (dot) {
+    if (isError) {
+      dot.style.animation = '';
+      applyStatusDotVisuals('orange');
+    } else {
+      dot.style.animation = 'pulse-retranscribe 1.2s ease-in-out infinite';
+      applyStatusDotVisuals('blue');
+    }
+  }
+
+  const indicator = document.getElementById('processing-indicator');
+  if (indicator) {
+    indicator.textContent = isError ? modelName : `Re-transcribing with ${modelName}...`;
+    indicator.style.display = 'inline-block';
+    if (isError) {
+      indicator.style.color = '#ff9500';
+      // Auto-hide error after 3 seconds
+      setTimeout(() => hideRetranscribeProgress(), 3000);
+    } else {
+      indicator.style.color = '';
+    }
+  }
+}
+
+/**
+ * Hide the re-transcription spinner and restore normal status dot state.
+ */
+export function hideRetranscribeProgress() {
+  const dot = resolveStatusDot();
+  if (dot) {
+    dot.style.animation = '';
+  }
+
+  const indicator = document.getElementById('processing-indicator');
+  if (indicator) {
+    indicator.style.display = 'none';
+    indicator.style.color = '';
+  }
 }

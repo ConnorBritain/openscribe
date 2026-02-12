@@ -75,18 +75,18 @@ class HotkeyManager:
 
     def _log_status(self, message, color="black"):
         """Helper to call the status update callback if available."""
-        print(f"HotkeyManager Status: {message}")  # Also print to console
+        import sys
+        print(f"HotkeyManager Status: {message}", file=sys.stderr)  # stderr to avoid IPC noise
         if self.on_status_update:
             self.on_status_update(message, color)
 
     def _normalize_key(self, key):
         """Normalize key representation for consistent comparison."""
         # For special keys, return the key object itself.
-        # For character keys, return the KeyCode object.
+        # For character keys, return the KeyCode object with lowercase char
+        # so that Shift+X still matches config's KeyCode.from_char('x').
         if hasattr(key, "char") and key.char:
-            # It's a character key, potentially wrapped in KeyCode already or just a char
-            # We want the KeyCode object for consistency in the set
-            return keyboard.KeyCode.from_char(key.char)
+            return keyboard.KeyCode.from_char(key.char.lower())
         # It's a special key (like Key.cmd, Key.shift, etc.)
         return key
 

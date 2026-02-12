@@ -36,6 +36,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Re-transcribe a history entry with a different ASR model
   retranscribe: (entryId, modelId) => ipcRenderer.invoke('history:retranscribe', entryId, modelId),
 
+  // Re-paste text to Citrix via clipboard + Cmd+V
+  repaste: (text) => ipcRenderer.send('repaste-text', text),
+
   // Clean up listeners when they are no longer needed (important!)
   removeListener: (channel) => ipcRenderer.removeAllListeners(channel),
 

@@ -68,6 +68,17 @@ function initializeIpcHandlers() {
     }
   });
 
+  // Handle re-paste text command (used by "Use this" button for background retranscription)
+  ipcMain.on('repaste-text', (_event, text) => {
+    console.log('[IPC] repaste-text received');
+    const pythonShell = getPythonShell();
+    if (pythonShell && pythonShell.send) {
+      pythonShell.send(`REPASTE:${text}`);
+    } else {
+      console.error('[IPC] Python shell not available for REPASTE command');
+    }
+  });
+
   // Add other ipcMain.on handlers here if needed in the future
 
   // Handle settings saving
