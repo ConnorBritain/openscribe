@@ -621,19 +621,30 @@ class Application:
         # Check if background retranscription already has a cached result
         cached = self._bg_retranscribe_result
         if cached and cached.get("success") and cached.get("transcript"):
-            log_text("RETRANSCRIBE", "Using cached background retranscribe result")
-            result_text = cached["transcript"]
-            print(f"RETRANSCRIBE_START:{cached.get('modelId', secondary_model)}", flush=True)
-            print("RETRANSCRIBE_END:success", flush=True)
-            # Re-emit as a non-auto result so frontend auto-pastes
-            manual_payload = dict(cached)
-            manual_payload["autoTriggered"] = False
-            print(f"RETRANSCRIBE_QUICK_RESULT:{json.dumps(manual_payload, ensure_ascii=False)}", flush=True)
-            print(f"FINAL_TRANSCRIPT:{result_text}", flush=True)
-            send_text_to_citrix(result_text + " ")
-            self._handle_status_update("Re-transcription complete (cached).", "green")
-            self._bg_retranscribe_result = None
-            return
+            cached_entry_id = cached.get("entryId")
+            if (
+                cached_entry_id
+                and self._last_history_entry_id
+                and cached_entry_id != self._last_history_entry_id
+            ):
+                log_text(
+                    "RETRANSCRIBE",
+                    f"Ignoring stale cached result for {cached_entry_id}; latest is {self._last_history_entry_id}",
+                )
+                self._bg_retranscribe_result = None
+            else:
+                log_text("RETRANSCRIBE", "Using cached background retranscribe result")
+                result_text = cached["transcript"]
+                print(f"RETRANSCRIBE_START:{cached.get('modelId', secondary_model)}", flush=True)
+                print("RETRANSCRIBE_END:success", flush=True)
+                # Re-emit as a manual result so frontend updates the linked transcript entry.
+                manual_payload = dict(cached)
+                manual_payload["autoTriggered"] = False
+                print(f"RETRANSCRIBE_QUICK_RESULT:{json.dumps(manual_payload, ensure_ascii=False)}", flush=True)
+                send_text_to_citrix(result_text + " ")
+                self._handle_status_update("Re-transcription complete (cached).", "green")
+                self._bg_retranscribe_result = None
+                return
 
         entry_id = self._last_history_entry_id
         if not entry_id:
@@ -676,7 +687,6 @@ class Application:
                 print(f"RETRANSCRIBE_QUICK_RESULT:{json.dumps(result_payload, ensure_ascii=False)}", flush=True)
 
                 if result_text:
-                    print(f"FINAL_TRANSCRIPT:{result_text}", flush=True)
                     send_text_to_citrix(result_text + " ")
                     self._handle_status_update("Re-transcription complete.", "green")
                 else:

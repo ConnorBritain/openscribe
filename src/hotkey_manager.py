@@ -87,7 +87,25 @@ class HotkeyManager:
         # so that Shift+X still matches config's KeyCode.from_char('x').
         if hasattr(key, "char") and key.char:
             return keyboard.KeyCode.from_char(key.char.lower())
-        # It's a special key (like Key.cmd, Key.shift, etc.)
+        # Normalize left/right modifier variants so combos stay reliable.
+        modifier_groups = (
+            ("cmd", ("cmd_l", "cmd_r")),
+            ("shift", ("shift_l", "shift_r")),
+            ("ctrl", ("ctrl_l", "ctrl_r")),
+            ("alt", ("alt_l", "alt_r", "alt_gr")),
+        )
+        for canonical_name, aliases in modifier_groups:
+            canonical = getattr(keyboard.Key, canonical_name, None)
+            if canonical is None:
+                continue
+            if key == canonical:
+                return canonical
+            for alias_name in aliases:
+                alias = getattr(keyboard.Key, alias_name, None)
+                if alias is not None and key == alias:
+                    return canonical
+
+        # It's a non-character, non-modifier key.
         return key
 
     def _on_press(self, key):
@@ -111,7 +129,7 @@ class HotkeyManager:
                             "red",
                         )
                 # Prevent space from being added to the set if it stops dictation
-                self._current_keys.remove(normalized_key)
+                self._current_keys.discard(normalized_key)
                 return  # Stop further processing for this key press
 
         except Exception as e:
@@ -142,11 +160,12 @@ class HotkeyManager:
                             f"Error executing hotkey callback for '{command}': {e}",
                             "red",
                         )
-                # Optional: Clear keys after successful trigger? Depends on desired behavior.
-                # self._current_keys.clear()
+                # Clear after a successful match to avoid stale keys causing missed combos.
+                self._current_keys.clear()
+                return
 
             # Now remove the key
-            self._current_keys.remove(normalized_key)
+            self._current_keys.discard(normalized_key)
         except KeyError:
             # Key might have been released that wasn't tracked (e.g., if listener started while key was held)
             # log_text("HOTKEY_DEBUG", f"Key {normalized_key} released but not found in current keys.")

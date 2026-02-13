@@ -14,6 +14,7 @@ let sequenceCounter = 0;
 let heightAdjustmentCallback = null;
 let lastHistoryEntryId = null;
 let lastHistoryModel = null;
+let pendingHistoryTranscriptId = null;
 
 // Runtime caches used for quick DOM updates without full re-render.
 let entryDomMap = new Map();
@@ -370,6 +371,13 @@ function findTranscriptById(id) {
   return transcripts.find((entry) => entry.id === id) || null;
 }
 
+function findTranscriptByHistoryId(historyId) {
+  if (!historyId) {
+    return null;
+  }
+  return transcripts.find((entry) => entry.historyId === historyId) || null;
+}
+
 function showToolbarForSelection(entryId, selectionText) {
   hideAllToolbars();
 
@@ -686,11 +694,15 @@ export function updateActiveTranscriptText(text, { finalize = false } = {}) {
   entry.updatedAt = new Date();
   if (finalize) {
     entry.status = 'complete';
+    pendingHistoryTranscriptId = entry.id;
     // If this transcript hasn't been linked to a history entry yet,
     // link the most recent unclaimed history entry now.
     if (!entry.historyId && lastHistoryEntryId) {
       entry.historyId = lastHistoryEntryId;
       entry.historyModel = lastHistoryModel;
+    }
+    if (entry.historyId) {
+      pendingHistoryTranscriptId = null;
     }
     activeTranscriptId = null;
   }
@@ -712,6 +724,7 @@ export function finalizeActiveTranscript(text) {
 export function resetTranscriptLog() {
   transcripts = [];
   activeTranscriptId = null;
+  pendingHistoryTranscriptId = null;
   renderTranscripts();
 }
 
@@ -720,21 +733,26 @@ export function setLastHistoryEntry(entryData) {
   lastHistoryEntryId = entryData.id;
   lastHistoryModel = entryData.metadata?.model || null;
 
-  // Attach history info to the most recent completed transcript.
-  // Fall back to the active transcript if it hasn't been finalized yet
-  // (guards against HISTORY_ENTRY arriving before FINAL_TRANSCRIPT).
-  const recentEntry = transcripts.find((t) => t.status === 'complete')
-    || (activeTranscriptId && transcripts.find((t) => t.id === activeTranscriptId));
-  if (recentEntry) {
-    recentEntry.historyId = entryData.id;
-    recentEntry.historyModel = lastHistoryModel;
-    // Re-render to update the action bar (enable retranscribe dropdown)
-    const domEntry = entryDomMap.get(recentEntry.id);
-    if (domEntry && domEntry.retranscribeSelect) {
+  const targetEntry = findTranscriptByHistoryId(entryData.id)
+    || (pendingHistoryTranscriptId ? findTranscriptById(pendingHistoryTranscriptId) : null)
+    || transcripts.find((t) => t.status === 'complete' && !t.historyId)
+    || (activeTranscriptId && findTranscriptById(activeTranscriptId))
+    || transcripts.find((t) => t.status === 'complete');
+
+  if (targetEntry) {
+    targetEntry.historyId = entryData.id;
+    targetEntry.historyModel = lastHistoryModel;
+    pendingHistoryTranscriptId = null;
+
+    // Re-render so the action bar state/options are in sync.
+    renderTranscripts();
+
+    const domEntry = entryDomMap.get(targetEntry.id);
+    if (domEntry?.retranscribeSelect) {
       domEntry.retranscribeSelect.disabled = false;
       domEntry.retranscribeSelect.title = '';
     }
-    if (domEntry && domEntry.actionBar) {
+    if (domEntry?.actionBar) {
       domEntry.actionBar.classList.remove('is-hidden');
     }
   }
@@ -750,10 +768,10 @@ export function handleQuickRetranscribeResult(resultData) {
 
   const isAutoTriggered = !!resultData.autoTriggered;
 
-  // Find the most recent completed transcript to update
-  const recentEntry = transcripts.find((t) => t.status === 'complete');
+  const recentEntry = findTranscriptByHistoryId(resultData.entryId)
+    || transcripts.find((t) => t.status === 'complete');
   if (!recentEntry) {
-    logMessage('[TranscriptLog] No completed transcript to update with quick retranscribe result.');
+    logMessage('[TranscriptLog] No transcript found to update with quick retranscribe result.');
     return;
   }
 
