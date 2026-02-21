@@ -157,6 +157,7 @@ DEFAULT_THEME = "arc"  # Example theme, requires ttkthemes
 TOKENIZERS_PARALLELISM = "false"  # Environment variable setting
 LOG_TEXT_DETAIL_LEVEL = 1  # 0 = basic, 1 = detailed, etc. (currently informational)
 SEND_TO_CITRIX_ENABLED = True  # Set to False to only copy to clipboard without pasting
+LOCAL_API_PORT = 5050  # Port for the local background API server
 
 # When copying to clipboard for legacy apps, replace non-breaking hyphens, fancy quotes,
 # and other unicode punctuation with ASCII-safe equivalents.

@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Comprehensive documentation
 - Contributing guidelines
 - MIT license
+- Local HTTP API server for dictation control and status/result polling
+- CLI client (`citrix_cli.py`) for command-line start/stop/status workflows
 
 ### Changed
 - Renamed from "Citrix Transcriber" to "Professional Transcriber"

@@ -105,6 +105,8 @@ from src.config.settings_manager import settings_manager
 from src.text_processor import text_processor
 from src.history.history_manager import HistoryManager
 from src import llm_postprocessor
+from src.api_server import LocalAPIServer
+from src.dictation_session_store import DictationSessionStore
 
 def _sanitize_for_legacy_clipboards(text: str) -> str:
     """Replace non-breaking hyphens, non-breaking spaces, smart quotes, and narrow no-break spaces.
@@ -170,11 +172,11 @@ def send_text_to_citrix(text):
         log_text("ERROR", f"Failed to send text via Cmd+V: {e}")
 
 
-import json  # For IPC payload serialization
-
-
 class Application:
     """Main application class orchestrating all components."""
+
+    MAX_SESSION_RESULTS = 50
+    SESSION_RESULT_TTL_SECONDS = 15 * 60
 
     def __init__(self):
         self._program_active = True  # Overall state
@@ -187,6 +189,11 @@ class Application:
         self._bg_retranscribe_thread: Optional[threading.Thread] = None
         self._bg_retranscribe_result: Optional[Dict[str, Any]] = None
         self.history_manager = HistoryManager()
+        self.api_server: Optional[LocalAPIServer] = None
+        self._session_store = DictationSessionStore(
+            max_results=self.MAX_SESSION_RESULTS,
+            ttl_seconds=self.SESSION_RESULT_TTL_SECONDS,
+        )
 
         # --- Initialize Handlers ---
         # Initialize TranscriptionHandler with saved ASR model, coalescing to default if empty/invalid
@@ -217,6 +224,38 @@ class Application:
         # --- Initial Setup ---
         self._handle_status_update("Application initializing...", "grey")
 
+    def begin_api_dictation_session(self, *, suppress_paste: bool = False, source: Optional[str] = None) -> str:
+        return self._session_store.begin_session(suppress_paste=suppress_paste, source=source)
+
+    def clear_active_session(self, *, as_not_found: bool = False) -> None:
+        self._session_store.clear_active(as_not_found=as_not_found)
+
+    def mark_active_session_processing(self) -> Optional[str]:
+        return self._session_store.mark_processing()
+
+    def complete_active_session(
+        self, *, processed_text: str, history_entry_id: Optional[str], completed_at: Optional[float]
+    ) -> Dict[str, Any]:
+        return self._session_store.complete_active(
+            processed_text=processed_text,
+            history_entry_id=history_entry_id,
+            completed_at=completed_at,
+        )
+
+    def is_stop_session_valid(self, session_id: Optional[str]) -> bool:
+        return self._session_store.is_stop_session_valid(session_id)
+
+    def get_status_snapshot(self) -> Dict[str, Any]:
+        return self._session_store.get_status_snapshot()
+
+    def get_session_result(self, session_id: str) -> Dict[str, Any]:
+        audio_state = None
+        try:
+            audio_state = self.audio_handler.get_listening_state()
+        except Exception:
+            audio_state = None
+        return self._session_store.get_session_result(session_id, audio_state=audio_state)
+
     def start_backend(self):
         """Starts the application's background processes (Hotkeys only initially)."""
         self._handle_status_update(
@@ -237,6 +276,11 @@ class Application:
         
         self.hotkey_manager.start()
         self.start_backend_audio()
+        
+        # Start Local API
+        self.api_server = LocalAPIServer(self)
+        self.api_server.start()
+        
         # _update_app_state will be called once audio handler is ready
 
     def start_backend_audio(self):
@@ -301,6 +345,8 @@ class Application:
             )  # Ensure state is false on shutdown
             self.hotkey_manager.stop()
             self.audio_handler.stop()
+            if self.api_server:
+                self.api_server.stop()
             # Ensure PyAudio is terminated if AudioHandler didn't do it
             if hasattr(self.audio_handler, "_p") and self.audio_handler._p:
                 self.audio_handler.terminate_pyaudio()
@@ -320,6 +366,11 @@ class Application:
         """Receives status updates from handlers and prints them for Electron."""
         # Check if it's an amplitude message and print it directly if so
         if message.startswith("AUDIO_AMP:"):
+            try:
+                amp_value = int(message.split(":", 1)[1].strip())
+            except (ValueError, IndexError):
+                amp_value = 0
+            self._session_store.set_audio_amp(amp_value)
             print(message, flush=True)
         elif color == "STATE_MSG":
             # This is a detailed STATE JSON message, print it directly
@@ -393,6 +444,7 @@ class Application:
         """Called by AudioHandler when speech ends after dictation starts."""
         log_text("SPEECH_END", f"Received {len(audio_data)} audio samples.")
         self._handle_status_update("Speech ended. Transcribing...", "orange")
+        self.mark_active_session_processing()
         self._update_app_state()  # Update state to processing
 
         self._pending_audio_bytes = self._convert_audio_to_wav(audio_data)
@@ -455,14 +507,25 @@ class Application:
         )
         self._pending_audio_bytes = None
         self._current_dictation_started_at = None
+        session_outcome = self.complete_active_session(
+            processed_text=processed_text,
+            history_entry_id=history_entry_id,
+            completed_at=history_record.get("completedAt"),
+        )
 
         # Send transcription to Electron BEFORE history entry so the frontend
         # finalizes the transcript (status → 'complete') before linking history.
         if processed_text:
             print(f"FINAL_TRANSCRIPT:{processed_text}", flush=True)
-            self._handle_status_update("Sending to Citrix...", "blue")
-            send_text_to_citrix(processed_text + " ")  # Add space for easier continuation
-            log_text("TRANSCRIPTION_COMPLETE", "Text sent to Citrix via clipboard.")
+            if session_outcome.get("suppressPaste"):
+                log_text(
+                    "TRANSCRIPTION_COMPLETE",
+                    f"Session {session_outcome.get('sessionId')} suppressPaste enabled; skipped clipboard send.",
+                )
+            else:
+                self._handle_status_update("Sending to Citrix...", "blue")
+                send_text_to_citrix(processed_text + " ")  # Add space for easier continuation
+                log_text("TRANSCRIPTION_COMPLETE", "Text sent to Citrix via clipboard.")
             self._handle_status_update("Transcription complete.", "green")
         else:
             # Empty transcription - always finish
@@ -794,6 +857,7 @@ class Application:
             self._handle_status_update(
                 "Stopping dictation manually & processing...", "orange"
             )
+            self.mark_active_session_processing()
             self.audio_handler.force_process_audio()
             new_audio_state = (
                 self.audio_handler.get_listening_state()
@@ -820,6 +884,7 @@ class Application:
         self.hotkey_manager.set_dictating_state(False)  # <<< SET STATE TO FALSE
         self._pending_audio_bytes = None
         self._current_dictation_started_at = None
+        self.clear_active_session(as_not_found=True)
         self._update_app_state()  # Update state after aborting
 
     def _trigger_restart(self):

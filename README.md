@@ -10,6 +10,7 @@ A professional-grade speech-to-text transcription application focused on fast no
 - **Hotkey Support**: Global hotkeys for quick access to all features
 - **Cross-platform**: Works on macOS, Windows, and Linux
 - **Professional UI**: Clean, modern interface with Electron frontend
+- **Local API + CLI Control**: Automate dictation via localhost endpoints and terminal commands
 
 ## Use Cases
 
@@ -98,6 +99,23 @@ npm start
 3. Speak clearly into your microphone
 4. The transcribed text will appear in the interface
 5. Press `Cmd+Shift+S` to stop dictation
+
+### Local API and CLI
+
+The app now exposes a local API on `127.0.0.1:5050` and includes a CLI helper:
+
+```bash
+python citrix_cli.py start
+python citrix_cli.py stop
+python citrix_cli.py status
+```
+
+Available API routes:
+- `POST /start`
+- `POST /stop`
+- `GET /status`
+- `GET /result?sessionId=<id>`
+- `GET /events` (Server-Sent Events stream)
 
 ### Proofreading
 
