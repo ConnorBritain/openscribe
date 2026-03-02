@@ -1,4 +1,5 @@
 import json
+import sys
 import threading
 import time
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
@@ -7,6 +8,16 @@ from urllib.parse import parse_qs, urlparse
 from src.config import config
 from src.utils.utils import log_text
 from src.contracts.generated_contract import AUDIO_STATES, RESULT_STATES
+
+
+class QuietThreadingHTTPServer(ThreadingHTTPServer):
+    """Suppress noisy tracebacks for expected local client disconnects."""
+
+    def handle_error(self, request, client_address):
+        _, err, _ = sys.exc_info()
+        if isinstance(err, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)):
+            return
+        super().handle_error(request, client_address)
 
 class APIRequestHandler(BaseHTTPRequestHandler):
     """
@@ -289,7 +300,7 @@ class LocalAPIServer:
         """Start the HTTP server in a daemon thread."""
         try:
             # We map 127.0.0.1 to ensure local-only binding
-            self.server = ThreadingHTTPServer(('127.0.0.1', self.port), APIRequestHandler)
+            self.server = QuietThreadingHTTPServer(('127.0.0.1', self.port), APIRequestHandler)
             
             # Attach application context to server object so handlers can access it
             self.server.app = self.app

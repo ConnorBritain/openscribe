@@ -104,7 +104,7 @@ def _log_info(message: str) -> None:
     """Log info message respecting terminal output settings."""
     try:
         from src.utils.utils import log_text
-        log_text(message, "LLM_POST", color="cyan")
+        log_text("LLM_POST", message, color="cyan")
     except Exception:
         pass  # Silently fail if logging not available
 
@@ -113,6 +113,6 @@ def _log_warning(message: str) -> None:
     """Log warning message respecting terminal output settings."""
     try:
         from src.utils.utils import log_text
-        log_text(message, "LLM_WARN", color="yellow")
+        log_text("LLM_WARN", message, color="yellow")
     except Exception:
         pass  # Silently fail if logging not available

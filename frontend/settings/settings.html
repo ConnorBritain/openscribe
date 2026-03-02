@@ -77,9 +77,265 @@
             margin-bottom: 5px;
         }
 
+        li.nav-item-with-badge {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+        }
+
+        .nav-badge {
+            min-width: 18px;
+            height: 18px;
+            border-radius: 999px;
+            background: #d92d20;
+            color: #fff;
+            font-size: 11px;
+            font-weight: 700;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0 6px;
+        }
+
+        .nav-badge.hidden {
+            display: none;
+        }
+
         li:hover,
         li.active {
             background-color: #e0e0e0;
+        }
+
+        .handy-section-title {
+            margin: 0 0 12px 0;
+            letter-spacing: 0.08em;
+            color: #6d6d72;
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        .handy-card {
+            border: 1px solid #d9d9dd;
+            border-radius: 14px;
+            overflow: hidden;
+            background: #f7f7f8;
+            margin-bottom: 16px;
+        }
+
+        .handy-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 14px 16px;
+            border-top: 1px solid #dedee3;
+        }
+
+        .handy-row:first-child {
+            border-top: none;
+        }
+
+        .handy-row__label {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 600;
+            color: #1d1d1f;
+            font-size: 16px;
+        }
+
+        .handy-row__label small {
+            font-weight: 500;
+            font-size: 12px;
+            color: #6d6d72;
+        }
+
+        .handy-row__controls {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .shortcut-chip {
+            border: 2px solid #9a9aa0;
+            border-radius: 12px;
+            background: #f4f4f5;
+            color: #151517;
+            font-size: 14px;
+            font-weight: 700;
+            padding: 8px 14px;
+            min-width: 172px;
+            text-align: center;
+        }
+
+        .shortcut-chip:hover {
+            background: #ededf0;
+            border-color: #8a8a90;
+        }
+
+        .shortcut-chip.capturing {
+            border-color: #007aff;
+            color: #007aff;
+        }
+
+        .icon-button {
+            width: 32px;
+            height: 32px;
+            border: none;
+            border-radius: 999px;
+            background: transparent;
+            color: #2c2c2e;
+            font-size: 24px;
+            line-height: 1;
+            padding: 0;
+        }
+
+        .icon-button:hover {
+            background: #ececef;
+        }
+
+        .microphone-select {
+            min-width: 260px;
+            max-width: 360px;
+            border: 2px solid #f08ac0;
+            border-radius: 12px;
+            background: #f8f8fb;
+            padding: 8px 12px;
+            font-size: 16px;
+            font-weight: 600;
+            color: #1d1d1f;
+        }
+
+        .toggle-switch {
+            appearance: none;
+            width: 50px;
+            height: 30px;
+            border-radius: 999px;
+            background: #cbcbcf;
+            position: relative;
+            outline: none;
+            cursor: pointer;
+            transition: background 0.2s ease;
+        }
+
+        .toggle-switch::after {
+            content: "";
+            position: absolute;
+            top: 3px;
+            left: 3px;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            background: #fff;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+            transition: transform 0.2s ease;
+        }
+
+        .toggle-switch:checked {
+            background: #34c759;
+        }
+
+        .toggle-switch:checked::after {
+            transform: translateX(20px);
+        }
+
+        .info-tip {
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            border: 1.5px solid #8e8e93;
+            background: transparent;
+            color: #6d6d72;
+            font-size: 14px;
+            font-weight: 700;
+            line-height: 1;
+            position: relative;
+            cursor: help;
+            padding: 0;
+        }
+
+        .info-tip:hover {
+            background: transparent;
+            color: #4b4b50;
+            border-color: #6f6f74;
+        }
+
+        .info-tip::before {
+            content: attr(data-tip);
+            position: absolute;
+            left: 50%;
+            bottom: calc(100% + 10px);
+            transform: translateX(-50%);
+            background: #1f1f21;
+            color: #fff;
+            border-radius: 8px;
+            padding: 8px 10px;
+            width: 250px;
+            max-width: 250px;
+            font-size: 12px;
+            line-height: 1.35;
+            text-align: left;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.15s ease;
+            box-shadow: 0 6px 24px rgba(0, 0, 0, 0.24);
+            z-index: 20;
+        }
+
+        .info-tip:hover::before {
+            opacity: 1;
+        }
+
+        .inline-muted {
+            color: #6d6d72;
+            font-size: 12px;
+            margin-top: 4px;
+            display: block;
+        }
+
+        .hidden-inputs {
+            margin-top: 18px;
+            padding: 12px;
+            border-radius: 10px;
+            background: #f2f2f4;
+            border: 1px dashed #d0d0d6;
+        }
+
+        .about-copy {
+            margin: 0;
+            color: #444;
+            line-height: 1.45;
+            font-size: 14px;
+        }
+
+        .about-entry {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 4px;
+        }
+
+        .about-entry strong {
+            font-size: 15px;
+            color: #1d1d1f;
+        }
+
+        .about-entry span {
+            color: #4c4c52;
+            font-size: 13px;
+            line-height: 1.4;
+        }
+
+        .about-entry a {
+            color: #0056b3;
+            text-decoration: none;
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .about-entry a:hover {
+            text-decoration: underline;
         }
     </style>
 </head>
@@ -90,7 +346,11 @@
         <ul>
             <li id="nav-wakewords" class="active">Dictation</li>
             <li id="nav-asr">ASR Model</li>
-            <li id="nav-vocabulary">Vocabulary</li>
+            <li id="nav-vocabulary" class="nav-item-with-badge">
+                <span>Vocabulary</span>
+                <span id="nav-vocabulary-badge" class="nav-badge hidden">0</span>
+            </li>
+            <li id="nav-about">About</li>
             <!-- Add other sections as needed -->
         </ul>
     </div>
@@ -98,43 +358,100 @@
     <div id="content">
         <div id="section-wakewords" class="settings-section">
             <h2>Dictation</h2>
-            <p>Configure how the assistant listens and cleans up your speech.</p>
-            <div>
+            <div class="handy-card">
+                <div class="handy-row">
+                    <div class="handy-row__label">
+                        <span>Transcribe Shortcut</span>
+                        <button class="info-tip" type="button"
+                            data-tip="Press this shortcut to start or stop live dictation.">i</button>
+                    </div>
+                    <div class="handy-row__controls">
+                        <button id="transcribe-shortcut-button" class="shortcut-chip" type="button">Option + Space</button>
+                        <button id="transcribe-shortcut-reset" class="icon-button" type="button" title="Reset transcribe shortcut">↻</button>
+                    </div>
+                </div>
+                <div class="handy-row">
+                    <div class="handy-row__label">
+                        <span>Stop Transcribing Shortcut</span>
+                        <button class="info-tip" type="button"
+                            data-tip="Stops recording and immediately starts transcription processing.">i</button>
+                    </div>
+                    <div class="handy-row__controls">
+                        <button id="stop-transcribing-shortcut-button" class="shortcut-chip" type="button">Cmd + Shift + S</button>
+                        <button id="stop-transcribing-shortcut-reset" class="icon-button" type="button" title="Reset stop shortcut">↻</button>
+                    </div>
+                </div>
+                <div class="handy-row">
+                    <div class="handy-row__label">
+                        <span>Re-transcribe With Backup Model</span>
+                        <button class="info-tip" type="button"
+                            data-tip="Runs the latest dictation through your backup ASR model and pastes the improved result.">i</button>
+                    </div>
+                    <div class="handy-row__controls">
+                        <button id="retranscribe-shortcut-button" class="shortcut-chip" type="button">Ctrl + Option + R</button>
+                        <button id="retranscribe-shortcut-reset" class="icon-button" type="button" title="Reset backup shortcut">↻</button>
+                    </div>
+                </div>
+            </div>
+
+            <h3 class="handy-section-title">SOUND</h3>
+            <div class="handy-card">
+                <div class="handy-row">
+                    <div class="handy-row__label">
+                        <span>Microphone</span>
+                        <button class="info-tip" type="button"
+                            data-tip="Select which microphone device to use for dictation input.">i</button>
+                    </div>
+                    <div class="handy-row__controls">
+                        <select id="microphone-select" class="microphone-select">
+                            <option value="default">Default</option>
+                        </select>
+                        <button id="refresh-microphones-button" class="icon-button" type="button" title="Refresh microphone list">↻</button>
+                    </div>
+                </div>
+                <div class="handy-row">
+                    <div class="handy-row__label">
+                        <span>Wake Word Listening</span>
+                        <button class="info-tip" type="button"
+                            data-tip="When disabled, voice wake words stop listening and only shortcuts/manual controls work.">i</button>
+                    </div>
+                    <input type="checkbox" id="wake-word-enabled-toggle" class="toggle-switch" checked>
+                </div>
+                <div class="handy-row">
+                    <div class="handy-row__label">
+                        <span>Auto Stop On Silence</span>
+                        <button class="info-tip" type="button"
+                            data-tip="Stops dictation automatically when silence is detected.">i</button>
+                    </div>
+                    <input type="checkbox" id="auto-stop-toggle" class="toggle-switch" checked>
+                </div>
+            </div>
+
+            <div class="hidden-inputs">
                 <label for="wake-words-dictate-input">Dictation Wake Word(s):</label>
                 <input type="text" id="wake-words-dictate-input" placeholder="e.g., note, dictate">
-            </div>
-            <div style="margin: 10px 0;">
-                <label for="wake-word-enabled-toggle"
-                    style="display: flex; align-items: center; gap: 8px; font-weight: normal;">
-                    <input type="checkbox" id="wake-word-enabled-toggle" checked>
-                    Listen for wake words (voice activation)
-                </label>
-                <small style="display:block; color:#666; margin-top:4px;">Turn off to rely on hotkeys/manual controls
-                    only.</small>
-            </div>
-            <div style="margin: 12px 0;">
-                <label for="filter-filler-toggle"
-                    style="display: flex; align-items: center; gap: 8px; font-weight: normal;">
-                    <input type="checkbox" id="filter-filler-toggle">
-                    Remove filler words automatically
-                </label>
-            </div>
-            <div>
+
+                <div style="margin: 12px 0;">
+                    <label for="filter-filler-toggle"
+                        style="display: flex; align-items: center; gap: 8px; font-weight: normal;">
+                        <input type="checkbox" id="filter-filler-toggle">
+                        Remove filler words automatically
+                    </label>
+                </div>
                 <label for="filler-words-input">Filler words to remove:</label>
                 <textarea id="filler-words-input" placeholder="um, uh, ah, er"></textarea>
-                <small style="display:block; color:#666; margin-top:4px;">Comma-separated list (e.g., um, uh,
-                    er)</small>
+                <small class="inline-muted">Comma-separated list (e.g., um, uh, er)</small>
+
+                <div style="margin-top: 12px;">
+                    <label for="ui-mode-select">Interface Style:</label>
+                    <select id="ui-mode-select" style="width: 300px; max-width: 100%; padding: 8px;">
+                        <option value="classic">Classic (full controls + transcript)</option>
+                        <option value="handy">Handy-style (compact bottom-center)</option>
+                    </select>
+                </div>
             </div>
-            <div style="margin: 12px 0;">
-                <label for="auto-stop-toggle"
-                    style="display: flex; align-items: center; gap: 8px; font-weight: normal;">
-                    <input type="checkbox" id="auto-stop-toggle" checked>
-                    Automatically stop dictation after silence
-                </label>
-                <small style="display:block; color:#666; margin-top:4px;">When off, dictation continues until you stop
-                    it manually.</small>
-            </div>
-            <button id="save-dictation-button">Save Dictation Settings</button>
+
+            <button id="save-dictation-button" style="margin-top: 14px;">Save Dictation Settings</button>
             <p id="wake-words-status" style="color: green; margin-top: 10px;"></p>
         </div>
 
@@ -163,13 +480,16 @@
             </small>
         </div>
         <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #e9ecef;">
-            <label for="secondary-asr-model-select">Secondary Model (for quick re-transcribe hotkey Cmd+Shift+X):</label>
+            <label for="secondary-asr-model-select">Secondary Model (used by Re-transcribe shortcut):</label>
             <select id="secondary-asr-model-select">
                 <option value="">None</option>
                 <!-- Secondary ASR models will be populated dynamically -->
             </select>
             <small style="display:block; color:#666; margin-top:6px;">
-                Press Cmd+Shift+X after a dictation to instantly re-transcribe with this model and auto-paste.
+                Choose the Re-transcribe shortcut in Dictation settings, then use that shortcut after a dictation to re-run with this model and auto-paste.
+            </small>
+            <small style="display:block; color:#666; margin-top:4px;">
+                If the secondary model is still loading, the app shows a "Preparing..." status first.
             </small>
         </div>
         <button id="save-asr-model-button" style="margin-top: 15px;">Save ASR Model</button>
@@ -178,134 +498,125 @@
 
     <div id="section-vocabulary" class="settings-section"
         style="display: none; padding-right: 30px; padding-bottom: 80px;">
-        <h2>Custom Vocabulary</h2>
-        <p>Manage your custom vocabulary to improve transcription accuracy.</p>
+        <h2>Medication Vocabulary</h2>
+        <p>Use this queue to manage medication misspellings and map observed phrases to canonical names.</p>
 
-        <!-- Quick Add Term -->
-        <div style="background: #f8f9fa; padding: 30px; border-radius: 8px; margin-bottom: 30px; overflow: hidden;">
-            <h3 style="margin-bottom: 25px; color: #333;">Add New Term</h3>
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 25px; margin-bottom: 25px;">
-                <div>
-                    <label for="new-term-correct"
-                        style="display: block; margin-bottom: 8px; font-weight: bold; color: #555;">Correct
-                        Term:</label>
-                    <input type="text" id="new-term-correct" placeholder="e.g., azithromycin"
-                        style="width: calc(100% - 24px); padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-sizing: border-box;">
-                </div>
-                <div>
-                    <label for="new-term-variations"
-                        style="display: block; margin-bottom: 8px; font-weight: bold; color: #555;">Common
-                        Mistakes:</label>
-                    <input type="text" id="new-term-variations" placeholder="e.g., as throw my sin, azthr my sin"
-                        style="width: calc(100% - 24px); padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-sizing: border-box;">
-                    <small style="color: #666; font-size: 12px; display: block; margin-top: 4px;">Separate multiple
-                        variations with commas</small>
-                </div>
+        <div style="background: #f8f9fa; padding: 24px; border-radius: 8px; margin-bottom: 24px;">
+            <h3 style="margin: 0 0 12px 0; color: #333;">Medication Auto-Learn</h3>
+            <div style="display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-bottom: 12px;">
+                <label for="med-autolearn-toggle"
+                    style="display: inline-flex; align-items: center; gap: 10px; font-weight: 600; margin: 0;">
+                    <input type="checkbox" id="med-autolearn-toggle" class="toggle-switch" checked>
+                    Enable guarded background auto-learn
+                </label>
+                <button id="med-autolearn-run-now"
+                    style="background: #0056b3; color: white; border: none; padding: 9px 14px; border-radius: 6px; cursor: pointer; font-weight: 600;">
+                    Run Now
+                </button>
             </div>
-            <div style="display: flex; gap: 25px; align-items: end;">
-                <div style="flex: 1;">
-                    <label for="new-term-category"
-                        style="display: block; margin-bottom: 8px; font-weight: bold; color: #555;">Category:</label>
-                    <select id="new-term-category"
-                        style="width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-sizing: border-box;">
-                        <option value="general">General</option>
-                        <option value="medication">Medication</option>
-                        <option value="medical_terms">Medical Terms</option>
-                        <option value="names">Names</option>
-                    </select>
-                </div>
-                <button id="add-term-button"
-                    style="background: #007bff; color: white; border: none; padding: 14px 24px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px; white-space: nowrap; min-width: 120px;">
-                    Add Term
+            <div id="med-autolearn-last-summary"
+                style="font-size: 13px; color: #475467; background: #fff; border: 1px solid #e4e7ec; border-radius: 6px; padding: 12px 14px;">
+                No auto-learn runs yet.
+            </div>
+        </div>
+
+        <div style="background: #f8f9fa; padding: 24px; border-radius: 8px; margin-bottom: 24px;">
+            <h3 style="margin: 0 0 12px 0; color: #333;">Import Suggested Mappings</h3>
+            <p style="margin: 0 0 12px 0; color: #666; font-size: 13px;">
+                Import high-confidence pairs from the analysis report and send medium-confidence pairs to review.
+            </p>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <input type="text" id="med-report-path" value="docs/medication_transcription_error_report.md"
+                    style="flex: 1; padding: 10px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px;">
+                <button id="med-import-button"
+                    style="background: #0056b3; color: white; border: none; padding: 10px 16px; border-radius: 6px; cursor: pointer; font-weight: 600;">
+                    Import Report
                 </button>
             </div>
         </div>
 
-        <!-- Current Vocabulary -->
-        <div style="margin-bottom: 30px;">
-            <h3 style="margin-bottom: 15px;">Current Vocabulary</h3>
-            <div style="display: flex; justify-content: center; margin-bottom: 15px;">
-                <input type="text" id="vocab-search" placeholder="Search vocabulary..."
-                    style="max-width: 400px; width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px;">
+        <div style="background: #f8f9fa; padding: 24px; border-radius: 8px; margin-bottom: 24px;">
+            <h3 style="margin: 0 0 12px 0; color: #333;">Add Medication Mapping</h3>
+            <div style="display: grid; grid-template-columns: 1fr 1fr auto; gap: 12px; align-items: end;">
+                <div>
+                    <label for="med-map-observed" style="margin-bottom: 6px;">Observed phrase</label>
+                    <input type="text" id="med-map-observed" placeholder="e.g., ozempic"
+                        style="width: 100%; box-sizing: border-box;">
+                </div>
+                <div>
+                    <label for="med-map-canonical" style="margin-bottom: 6px;">Canonical medication name</label>
+                    <input type="text" id="med-map-canonical" placeholder="e.g., Ozempic"
+                        style="width: 100%; box-sizing: border-box;">
+                </div>
+                <button id="med-map-add-button"
+                    style="background: #007bff; color: white; border: none; padding: 10px 16px; border-radius: 6px; cursor: pointer; font-weight: 600;">
+                    Save
+                </button>
             </div>
+        </div>
 
-            <!-- Stats Summary -->
-            <div id="vocab-stats"
-                style="background: #f0f8ff; padding: 15px; border-radius: 6px; margin-bottom: 20px; border: 1px solid #e1ecf4;">
-                <strong>Vocabulary Stats:</strong> <span id="stats-text">Loading...</span>
+        <div style="margin-bottom: 24px;">
+            <h3 style="margin: 0 0 10px 0;">Medication Mappings</h3>
+            <div style="display: flex; justify-content: center; margin-bottom: 12px;">
+                <input type="text" id="med-map-search" placeholder="Search mappings..."
+                    style="max-width: 420px; width: 100%; padding: 10px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px;">
             </div>
-
-            <!-- Vocabulary List -->
-            <div id="vocabulary-list"
-                style="max-height: 450px; overflow-y: auto; border: 1px solid #ddd; border-radius: 6px; margin-bottom: 20px;">
-                <div style="text-align: center; padding: 40px; color: #666;">
-                    Loading vocabulary...
+            <div style="background: #f0f8ff; padding: 12px 14px; border-radius: 6px; margin-bottom: 12px; border: 1px solid #e1ecf4;">
+                <strong>Summary:</strong> <span id="med-map-stats-text">Loading...</span>
+            </div>
+            <div id="med-map-list"
+                style="max-height: 320px; overflow-y: auto; border: 1px solid #ddd; border-radius: 6px; background: #fff;">
+                <div style="text-align: center; padding: 28px; color: #666;">
+                    Loading mappings...
                 </div>
             </div>
         </div>
 
-        <p id="vocabulary-status" style="color: green; margin-top: 15px; margin-bottom: 30px;"></p>
-
-        <!-- Edit Term Modal -->
-        <div id="edit-term-modal"
-            style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 1000; justify-content: center; align-items: center;">
-            <div
-                style="background: white; padding: 30px; border-radius: 8px; max-width: 600px; width: 90%; max-height: 80vh; overflow-y: auto;">
-                <h3 style="margin-bottom: 20px; color: #333;">Edit Vocabulary Term</h3>
-
-                <div style="margin-bottom: 20px;">
-                    <label style="display: block; margin-bottom: 8px; font-weight: bold; color: #555;">Correct
-                        Term:</label>
-                    <input type="text" id="edit-term-correct" readonly
-                        style="width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; background: #f8f9fa;">
+        <div style="margin-bottom: 24px;">
+            <h3 style="margin: 0 0 10px 0;">Review Queue</h3>
+            <div id="med-review-list"
+                style="max-height: 300px; overflow-y: auto; border: 1px solid #ddd; border-radius: 6px; background: #fff;">
+                <div style="text-align: center; padding: 28px; color: #666;">
+                    Loading review queue...
                 </div>
+            </div>
+        </div>
 
-                <div style="margin-bottom: 20px;">
-                    <label style="display: block; margin-bottom: 8px; font-weight: bold; color: #555;">Category:</label>
-                    <select id="edit-term-category"
-                        style="width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px;">
-                        <option value="general">General</option>
-                        <option value="medication">Medication</option>
-                        <option value="medical_terms">Medical Terms</option>
-                        <option value="names">Names</option>
-                    </select>
+        <p id="vocabulary-status" style="color: green; margin-top: 12px; margin-bottom: 30px;"></p>
+    </div>
+
+    <div id="section-about" class="settings-section" style="display: none; padding-right: 30px; padding-bottom: 60px;">
+        <h2>About</h2>
+        <p class="about-copy">CitrixTranscriberASR is built for fast, local-first medical dictation.</p>
+
+        <h3 class="handy-section-title">ACKNOWLEDGMENTS</h3>
+        <div class="handy-card">
+            <div class="handy-row">
+                <div class="about-entry">
+                    <strong>Handy</strong>
+                    <span>Thanks to the Handy project for design inspiration across settings and compact dictation UI.</span>
+                    <a href="https://github.com/cjpais/Handy" target="_blank" rel="noopener noreferrer">github.com/cjpais/Handy</a>
                 </div>
-
-                <div style="margin-bottom: 20px;">
-                    <label style="display: block; margin-bottom: 8px; font-weight: bold; color: #555;">Current
-                        Variations:</label>
-                    <div id="edit-variations-list"
-                        style="border: 1px solid #ddd; border-radius: 6px; padding: 15px; background: #f8f9fa; min-height: 80px; line-height: 1.5;">
-                        <!-- Variations will be displayed here with delete buttons -->
-                    </div>
-                    <small style="color: #666; font-size: 12px; margin-top: 4px; display: block;">Click the × button to
-                        remove a variation</small>
+            </div>
+            <div class="handy-row">
+                <div class="about-entry">
+                    <strong>OpenAI Whisper + MLX ecosystem</strong>
+                    <span>Local speech-to-text support is powered by Whisper-compatible models and Apple MLX tooling.</span>
+                    <a href="https://github.com/openai/whisper" target="_blank" rel="noopener noreferrer">github.com/openai/whisper</a>
                 </div>
-
-                <div style="margin-bottom: 20px;">
-                    <label style="display: block; margin-bottom: 8px; font-weight: bold; color: #555;">Add New
-                        Variation:</label>
-                    <div style="display: flex; gap: 10px; align-items: stretch;">
-                        <input type="text" id="edit-new-variation-input" placeholder="e.g., new variation"
-                            style="flex: 1; padding: 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; height: 48px; box-sizing: border-box;">
-                        <button id="add-variation-button"
-                            style="background: #28a745; color: white; border: none; padding: 12px 16px; border-radius: 6px; cursor: pointer; font-weight: 500; white-space: nowrap; height: 48px; box-sizing: border-box;">
-                            Add
-                        </button>
-                    </div>
-                    <small style="color: #666; font-size: 12px; margin-top: 4px; display: block;">Type a variation and
-                        click Add to include it above</small>
+            </div>
+            <div class="handy-row">
+                <div class="about-entry">
+                    <strong>Vosk + openWakeWord</strong>
+                    <span>Wake-word and speech-detection flows rely on open-source speech infrastructure from these projects.</span>
+                    <a href="https://alphacephei.com/vosk/" target="_blank" rel="noopener noreferrer">alphacephei.com/vosk</a>
                 </div>
-
-                <div style="display: flex; gap: 10px; justify-content: flex-end;">
-                    <button id="cancel-edit-button"
-                        style="background: #6c757d; color: white; border: none; padding: 12px 20px; border-radius: 6px; cursor: pointer; font-weight: 500;">
-                        Cancel
-                    </button>
-                    <button id="save-edit-button"
-                        style="background: #28a745; color: white; border: none; padding: 12px 20px; border-radius: 6px; cursor: pointer; font-weight: 500;">
-                        Save Changes
-                    </button>
+            </div>
+            <div class="handy-row">
+                <div class="about-entry">
+                    <strong>Electron</strong>
+                    <span>Desktop app shell and windowing are provided by Electron.</span>
+                    <a href="https://www.electronjs.org/" target="_blank" rel="noopener noreferrer">electronjs.org</a>
                 </div>
             </div>
         </div>

@@ -8,7 +8,7 @@
     <title>Citrix Transcriber</title>
     <link rel="stylesheet" href="../styles/style.css">
 </head>
-<body>
+<body class="ui-mode-classic">
     <!-- Microphone Conflict Warning Banner (hidden by default) -->
     <div id="mic-conflict-banner" class="mic-conflict-banner hidden">
         <div class="conflict-icon">⚠️</div>
@@ -24,12 +24,32 @@
         <div id="waveform-area">
             <canvas id="waveform-canvas" width="550" height="40"></canvas>
         </div>
+        <div id="activity-pill" class="activity-pill state-inactive" aria-hidden="true">
+            <div class="activity-pill__left">
+                <span id="handy-status-dot" class="dot"></span>
+                <span id="activity-icon" class="activity-icon show-ear is-listening" aria-hidden="true">
+                    <img class="activity-icon__ear" src="../../assets/icons/handy-ear.svg" alt="" />
+                    <img class="activity-icon__brain" src="../../assets/icons/handy-brain.svg" alt="" />
+                </span>
+            </div>
+            <div class="activity-pill__middle">
+                <div id="handy-bars" class="bars-container" aria-hidden="true"></div>
+                <span id="activity-label" class="activity-label">Listening</span>
+                <span id="handy-mode-indicator" class="indicator-text" style="display: none;">Note</span>
+                <span id="handy-processing-indicator" class="indicator-text" style="display: none;">Transcribing</span>
+            </div>
+            <div class="activity-pill__right">
+                <button id="pill-cancel-button" class="pill-cancel-button" title="Cancel active dictation" aria-label="Cancel active dictation">
+                    <img class="pill-cancel-button__icon" src="../../assets/icons/handy-cancel.svg" alt="" />
+                </button>
+            </div>
+        </div>
         <div id="control-bar">
             <div class="status-indicators">
                 <span id="status-dot" class="dot"></span>
                 <span class="triangle-icon">▲</span>
-                <span id="mode-indicator" class="indicator-text" style="display: none;">Note</span> <!-- Hidden by default -->
-                <span id="processing-indicator" class="indicator-text" style="display: none;">Loading...</span> <!-- Hidden by default -->
+                <span id="mode-indicator" class="indicator-text" style="display: none;">Note</span>
+                <span id="processing-indicator" class="indicator-text" style="display: none;">Loading...</span>
             </div>
             <div class="buttons">
                 <button id="wakeword-toggle" aria-pressed="true" title="Toggle wake word listening">Wake Word On</button>

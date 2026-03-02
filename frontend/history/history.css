@@ -205,60 +205,6 @@ body {
   color: #e8edf7;
 }
 
-.correction-toolbar {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  background: rgba(88, 166, 255, 0.12);
-  border: 1px solid rgba(88, 166, 255, 0.3);
-  border-radius: 6px;
-  padding: 10px 12px;
-  margin-bottom: 12px;
-  font-size: 13px;
-}
-
-.correction-toolbar.hidden {
-  display: none;
-}
-
-.correction-selection {
-  flex: 0 0 auto;
-  color: #cde2ff;
-  font-weight: 500;
-  max-width: 240px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-#correction-input {
-  flex: 1 1 auto;
-  padding: 8px 10px;
-  border-radius: 6px;
-  border: 1px solid rgba(88, 166, 255, 0.35);
-  background: rgba(14, 21, 30, 0.9);
-  color: #e6f1ff;
-  font-size: 13px;
-}
-
-#correction-input::placeholder {
-  color: rgba(198, 218, 255, 0.6);
-}
-
-#correction-learn {
-  background: rgba(88, 166, 255, 0.25);
-  border: 1px solid rgba(88, 166, 255, 0.55);
-  color: #d6e6ff;
-  border-radius: 6px;
-  padding: 8px 14px;
-  cursor: pointer;
-  transition: background 0.2s ease;
-}
-
-#correction-learn:hover {
-  background: rgba(88, 166, 255, 0.4);
-}
-
 /* Comparison UI Styles */
 
 .compare-controls {

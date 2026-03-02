@@ -9,10 +9,6 @@ const audioSection = document.getElementById('detail-audio-section');
 const audioPlayer = document.getElementById('detail-audio-player');
 const audioHint = document.getElementById('detail-audio-hint');
 const transcriptContainer = document.getElementById('detail-transcript');
-const correctionToolbar = document.getElementById('correction-toolbar');
-const correctionSelection = document.getElementById('correction-selection');
-const correctionInput = document.getElementById('correction-input');
-const correctionButton = document.getElementById('correction-learn');
 const deleteButton = document.getElementById('detail-delete-button');
 const detailFeedback = document.getElementById('detail-feedback');
 
@@ -132,7 +128,6 @@ function showEmptyDetail() {
 function renderDetail(entry) {
   detailContainer.classList.remove('hidden');
   emptyDetail.classList.add('hidden');
-  correctionToolbar.classList.add('hidden');
   if (detailFeedback) {
     detailFeedback.textContent = '';
     detailFeedback.style.color = '';
@@ -195,63 +190,6 @@ function handleSearch(event) {
   }
 }
 
-function getSelectionTextWithinTranscript() {
-  const selection = window.getSelection();
-  if (!selection || selection.rangeCount === 0) return '';
-  const range = selection.getRangeAt(0);
-  if (!transcriptContainer.contains(range.commonAncestorContainer)) {
-    return '';
-  }
-  const text = selection.toString().trim();
-  return text;
-}
-
-function updateCorrectionToolbar() {
-  const selectedText = getSelectionTextWithinTranscript();
-  if (!selectedText) {
-    correctionToolbar.classList.add('hidden');
-    if (correctionButton) correctionButton.disabled = true;
-    return;
-  }
-  correctionSelection.textContent = selectedText.length > 80 ? `${selectedText.slice(0, 77)}…` : selectedText;
-  correctionToolbar.classList.remove('hidden');
-  if (correctionInput) {
-    correctionInput.value = selectedText;
-    correctionInput.focus();
-    correctionInput.select();
-  }
-  if (correctionButton) correctionButton.disabled = false;
-}
-
-async function learnCorrection() {
-  const original = getSelectionTextWithinTranscript();
-  if (!original) {
-    correctionToolbar.classList.add('hidden');
-    return;
-  }
-  const corrected = correctionInput?.value.trim();
-  if (!corrected) {
-    alert('Enter the corrected wording first.');
-    correctionInput?.focus();
-    return;
-  }
-
-  try {
-    await window.historyAPI.learnCorrection({
-      original,
-      corrected,
-      context: selectedEntry?.processedTranscript || selectedEntry?.transcript || ''
-    });
-    correctionToolbar.classList.add('hidden');
-    if (correctionInput) correctionInput.value = '';
-    if (correctionButton) correctionButton.disabled = true;
-    alert('Correction saved to vocabulary.');
-  } catch (error) {
-    console.error('Failed to learn correction', error);
-    alert('Failed to save correction.');
-  }
-}
-
 function copyTranscript() {
   if (!selectedEntry) return;
   const text = selectedEntry.processedTranscript || selectedEntry.transcript || '';
@@ -259,14 +197,6 @@ function copyTranscript() {
 }
 
 searchInput.addEventListener('input', handleSearch);
-transcriptContainer.addEventListener('mouseup', updateCorrectionToolbar);
-transcriptContainer.addEventListener('keyup', updateCorrectionToolbar);
-correctionButton.addEventListener('click', learnCorrection);
-correctionInput?.addEventListener('keypress', (event) => {
-  if (event.key === 'Enter') {
-    learnCorrection();
-  }
-});
 copyButton.addEventListener('click', copyTranscript);
 
 deleteButton?.addEventListener('click', async () => {

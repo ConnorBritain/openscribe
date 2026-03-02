@@ -396,8 +396,8 @@ class TestMicrophoneConflictDuringDictation(unittest.TestCase):
             amplitude_messages = []
             status_messages = []
             def mock_status_update(message, color):
-                if message.startswith("AUDIO_AMP:"):
-                    amplitude_messages.append(message)
+                if message.startswith("AUDIO_METRICS:"):
+                    amplitude_messages.append(json.loads(message.split(":", 1)[1]))
                 else:
                     status_messages.append((message, color))
             
@@ -409,8 +409,9 @@ class TestMicrophoneConflictDuringDictation(unittest.TestCase):
             
             # Should have received zero amplitude messages
             self.assertTrue(len(amplitude_messages) > 0)
-            for msg in amplitude_messages:
-                self.assertEqual(msg, "AUDIO_AMP:0")
+            for payload in amplitude_messages:
+                self.assertEqual(payload["amplitude"], 0)
+                self.assertIn("levels", payload)
             
             # Should have detected conflict and set warning flag
             # Note: The warning flag may not be set in CI mode, so check more broadly
@@ -448,8 +449,8 @@ class TestMicrophoneConflictDuringDictation(unittest.TestCase):
             # Mock the status update callback to capture amplitude messages
             amplitude_messages = []
             def mock_status_update(message, color):
-                if message.startswith("AUDIO_AMP:"):
-                    amplitude_messages.append(message)
+                if message.startswith("AUDIO_METRICS:"):
+                    amplitude_messages.append(json.loads(message.split(":", 1)[1]))
             
             audio_handler.on_status_update = mock_status_update
             
@@ -458,7 +459,7 @@ class TestMicrophoneConflictDuringDictation(unittest.TestCase):
             
             # Should have received non-zero amplitude message
             self.assertTrue(len(amplitude_messages) > 0)
-            amplitude_value = int(amplitude_messages[0].split(":")[1])
+            amplitude_value = int(amplitude_messages[0]["amplitude"])
             self.assertGreater(amplitude_value, 0)
             
         except ImportError as e:
@@ -473,9 +474,10 @@ class TestMicrophoneConflictDuringDictation(unittest.TestCase):
                 
             # Verify main loop conflict detection exists
             self.assertIn('_main_loop_silent_count', audio_content)
-            self.assertIn('main_loop_conflict_logged', audio_content)
-            self.assertIn('sustained silent data', audio_content)
-            self.assertIn('AUDIO_CONFLICT', audio_content)
+            self.assertIn('_zero_frame_recovery_threshold', audio_content)
+            self.assertIn('_schedule_stream_recovery(', audio_content)
+            self.assertIn('"zero_frames"', audio_content)
+            self.assertIn('AUDIO_RECOVERY_SCHEDULED', audio_content)
             
         except FileNotFoundError:
             self.fail("audio_handler.py file not found")

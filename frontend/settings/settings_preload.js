@@ -9,6 +9,10 @@ contextBridge.exposeInMainWorld('settingsAPI', {
 
   ensureModel: (modelId) => ipcRenderer.invoke('ensure-model', modelId),
 
+  listMicrophones: () => ipcRenderer.invoke('list-microphones'),
+
+  setHotkeysSuspended: (suspended) => ipcRenderer.invoke('set-hotkeys-suspended', !!suspended),
+
   // Function to call vocabulary API
   callVocabularyAPI: (command, data = {}) => ipcRenderer.invoke('vocabulary-api', command, data),
 

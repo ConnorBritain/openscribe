@@ -157,6 +157,8 @@ from src.performance_optimizer import start_perf_timer, end_perf_timer
 # Import configuration constants
 from src.config import config
 from src.config.settings_manager import settings_manager
+from src.audio.handy_visualizer import HandyAudioVisualizer
+from src import ipc_contract
 
 
 class AudioHandler:
@@ -188,6 +190,22 @@ class AudioHandler:
         self._audio_thread = None
         self._stop_event = threading.Event()
         self._vad_lock = threading.Lock()
+        self._input_device_preference = str(
+            settings_manager.get_setting("selectedMicrophoneId", "default") or "default"
+        )
+        self._pending_stream_switch = False
+        self._pending_stream_recovery = False
+        self._stream_recovery_reason = ""
+        self._stream_recovery_message = ""
+        self._stream_recovery_next_attempt_at = 0.0
+        self._stream_recovery_started_at = 0.0
+        self._stream_recovery_attempts = 0
+        self._stream_recovery_error_emitted = False
+        self._stream_recovery_initial_state = "inactive"
+        self._last_stream_device_signature = None
+        self._last_route_poll_time = 0.0
+        self._route_poll_interval = 2.0
+        self._zero_frame_recovery_threshold = 50
         
         # Microphone availability state
         self._mic_availability_checked = False
@@ -199,6 +217,8 @@ class AudioHandler:
         self._sample_rate = config.SAMPLE_RATE
         self._frame_duration_ms = config.FRAME_DURATION_MS
         self._frame_size = config.FRAME_SIZE
+        self._stream_sample_rate = self._sample_rate
+        self._stream_frame_size = self._frame_size
 
         # Silence auto-stop configuration
         self._auto_stop_on_silence = bool(
@@ -241,6 +261,10 @@ class AudioHandler:
         self._voiced_frames = []
         self._triggered = False
         self._silence_start_time = None
+        self._silent_frame_count = 0
+        self._low_amp_count = 0
+        self._main_loop_silent_count = 0
+        self._recent_low_amp_count = 0
         self._wake_words_config = (
             {}
         )  # Store {metaphone: command} mapping - Will be populated by update_wake_words
@@ -252,6 +276,602 @@ class AudioHandler:
 
         # Start memory monitoring
         # start_memory_monitoring()
+
+        # Handy-style visualization (multi-bin vocal spectrum levels)
+        self._initialize_visualizer()
+
+    def _initialize_visualizer(self):
+        """Initialize Handy-style visualizer."""
+        self._handy_visualizer = None
+        self._viz_last_levels = [0.0] * 16
+        try:
+            self._handy_visualizer = HandyAudioVisualizer(
+                sample_rate=self._sample_rate,
+                window_size=512,
+                bucket_count=16,
+                freq_min_hz=400.0,
+                freq_max_hz=4000.0,
+                db_min=-55.0,
+                db_max=-8.0,
+                gain=1.3,
+                curve_power=0.7,
+                noise_alpha=0.001,
+            )
+            self._viz_last_levels = self._handy_visualizer.last_levels
+        except Exception as error:
+            log_text("AUDIO_VISUALIZER", f"Error initializing visualizer: {error}")
+            self._handy_visualizer = None
+            self._viz_last_levels = [0.0] * 16
+
+    def _reset_visualizer_state(self):
+        """Reset adaptive noise floor state for level visualization."""
+        if self._handy_visualizer is not None:
+            self._handy_visualizer.reset()
+            self._viz_last_levels = self._handy_visualizer.last_levels
+        else:
+            self._viz_last_levels = [0.0] * 16
+
+    def _compute_visualizer_levels(self, frame_data):
+        """Compute Handy-like multi-bin vocal spectrum levels from a frame."""
+        if self._handy_visualizer is None:
+            return [0.0] * 16
+        try:
+            levels = self._handy_visualizer.feed(frame_data)
+            if levels is not None:
+                self._viz_last_levels = levels
+            return levels
+        except Exception as error:
+            log_text("AUDIO_VISUALIZER", f"Error computing visualizer levels: {error}")
+            return None
+
+    def _emit_audio_visual_feedback(self, amplitude_value: int, frame_data=None):
+        """Emit structured audio visualization metrics to frontend."""
+        if not self.on_status_update:
+            return
+
+        safe_amplitude = max(0, min(100, int(amplitude_value)))
+
+        levels = self._compute_visualizer_levels(frame_data)
+        if levels is None:
+            levels = self._viz_last_levels
+        try:
+            raw_payload = {
+                "amplitude": safe_amplitude,
+                "levels": [round(float(level), 4) for level in levels],
+            }
+            metrics_payload = ipc_contract.normalize_audio_metrics_payload(
+                raw_payload,
+                expected_levels=len(raw_payload["levels"]),
+            )
+            if metrics_payload is None:
+                return
+            self.on_status_update(ipc_contract.with_prefix("audioMetrics", metrics_payload), "blue")
+        except Exception as error:
+            log_text("AUDIO_VISUALIZER", f"Error emitting visualizer levels: {error}")
+
+    def _emit_state_update(self, state_payload):
+        if not self.on_status_update:
+            return
+        normalized_state = ipc_contract.normalize_state_payload(
+            state_payload, defaults=state_payload
+        )
+        if normalized_state is None:
+            return
+        try:
+            self.on_status_update(
+                ipc_contract.with_prefix("state", normalized_state),
+                "STATE_MSG",
+            )
+        except Exception as e:
+            log_text(
+                "AUDIO_HANDLER_STATE_SEND_ERROR",
+                f"Error sending detailed STATE update: {e}",
+            )
+
+    def _resolve_selected_input_device(self):
+        """
+        Resolve selected input device preference.
+        Returns: (device_index_or_none, device_info_or_none)
+        """
+        preference = (self._input_device_preference or "default").strip().lower()
+        if preference in ("", "default", "system"):
+            try:
+                default_device = self._p.get_default_input_device_info()
+                return None, default_device
+            except Exception:
+                return None, None
+
+        try:
+            device_index = int(preference)
+            info = self._p.get_device_info_by_index(device_index)
+            if int(info.get("maxInputChannels", 0)) <= 0:
+                return None, None
+            return device_index, info
+        except Exception:
+            return None, None
+
+    def _build_candidate_sample_rates(self, device_info=None):
+        """Build preferred sample rates for opening input streams."""
+        rates = []
+
+        def add_rate(value):
+            try:
+                parsed = int(round(float(value)))
+            except (TypeError, ValueError):
+                return
+            if parsed > 0 and parsed not in rates:
+                rates.append(parsed)
+
+        add_rate(self._sample_rate)
+        if isinstance(device_info, dict):
+            add_rate(device_info.get("defaultSampleRate"))
+        # Common macOS input rates (including Continuity/iPhone mics)
+        add_rate(48000)
+        add_rate(44100)
+        add_rate(32000)
+        add_rate(16000)
+        add_rate(8000)
+        return rates
+
+    def _resample_frame_to_processing_rate(self, frame_bytes):
+        """Resample incoming int16 frame to self._sample_rate/self._frame_size when needed."""
+        if self._stream_sample_rate == self._sample_rate:
+            return frame_bytes
+
+        if not NUMPY_AVAILABLE:
+            # CI fallback: no real device audio path.
+            return frame_bytes
+
+        samples = np.frombuffer(frame_bytes, dtype=np.int16)
+        if samples.size == 0:
+            return b""
+
+        target_samples = int(self._frame_size)
+        if target_samples <= 0:
+            return b""
+
+        if samples.size == target_samples:
+            return frame_bytes
+
+        source_positions = np.linspace(0, samples.size - 1, num=samples.size, dtype=np.float32)
+        target_positions = np.linspace(0, samples.size - 1, num=target_samples, dtype=np.float32)
+        resampled = np.interp(target_positions, source_positions, samples.astype(np.float32))
+        resampled = np.clip(resampled, -32768, 32767).astype(np.int16)
+        return resampled.tobytes()
+
+    def _open_audio_stream(self):
+        """Open a PyAudio input stream using selected microphone preference."""
+        device_index, device_info = self._resolve_selected_input_device()
+        if device_info is None:
+            raise RuntimeError("Selected microphone device could not be resolved.")
+
+        max_channels = int(device_info.get("maxInputChannels", self._channels))
+        channel_count = min(max(1, self._channels), max_channels if max_channels > 0 else self._channels)
+        candidate_rates = self._build_candidate_sample_rates(device_info)
+        last_error = None
+
+        for candidate_rate in candidate_rates:
+            candidate_frame_size = int(candidate_rate * self._frame_duration_ms / 1000)
+            if candidate_frame_size <= 0:
+                continue
+
+            open_kwargs = {
+                "format": self._audio_format,
+                "channels": channel_count,
+                "rate": candidate_rate,
+                "input": True,
+                "frames_per_buffer": candidate_frame_size,
+            }
+            if device_index is not None:
+                open_kwargs["input_device_index"] = device_index
+
+            try:
+                stream = self._p.open(**open_kwargs)
+                stream.start_stream()
+                self._stream_sample_rate = candidate_rate
+                self._stream_frame_size = candidate_frame_size
+                self._last_stream_device_signature = self._device_signature(
+                    device_index, device_info
+                )
+                if candidate_rate != self._sample_rate:
+                    self._log_status(
+                        f"Input stream opened at {candidate_rate}Hz; resampling to {self._sample_rate}Hz.",
+                        "grey",
+                    )
+                return stream, device_info
+            except Exception as error:
+                last_error = error
+                continue
+
+        if last_error:
+            raise last_error
+        raise RuntimeError("Failed to open audio stream with any supported sample rate.")
+
+    def _close_stream(self, stream=None):
+        """Safely stop and close a PyAudio stream."""
+        target_stream = self._stream if stream is None else stream
+        if not target_stream:
+            return
+
+        try:
+            if hasattr(target_stream, "is_active") and target_stream.is_active():
+                target_stream.stop_stream()
+        except Exception:
+            pass
+
+        try:
+            target_stream.close()
+        except Exception:
+            pass
+
+        if stream is None or target_stream is self._stream:
+            self._stream = None
+
+    def _recreate_pyaudio_backend(self):
+        """Recreate the PyAudio backend to recover from route churn."""
+        if not PYAUDIO_AVAILABLE:
+            return
+
+        current_backend = getattr(self, "_p", None)
+        if current_backend and hasattr(current_backend, "terminate"):
+            try:
+                current_backend.terminate()
+            except Exception:
+                pass
+
+        self._p = pyaudio.PyAudio()
+
+    def _device_signature(self, device_index, device_info):
+        """Build a comparable description of the currently selected device."""
+        if not isinstance(device_info, dict):
+            return None
+
+        resolved_index = device_info.get("index", device_index)
+        try:
+            resolved_index = int(resolved_index) if resolved_index is not None else None
+        except (TypeError, ValueError):
+            resolved_index = None
+
+        try:
+            max_input_channels = int(device_info.get("maxInputChannels", 0))
+        except (TypeError, ValueError):
+            max_input_channels = 0
+
+        default_sample_rate = device_info.get("defaultSampleRate")
+        try:
+            default_sample_rate = (
+                int(round(float(default_sample_rate)))
+                if default_sample_rate is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            default_sample_rate = None
+
+        return {
+            "preference": self._input_device_preference,
+            "resolvedIndex": resolved_index,
+            "name": str(device_info.get("name", "Unknown Device")),
+            "maxInputChannels": max_input_channels,
+            "defaultSampleRate": default_sample_rate,
+        }
+
+    def _replace_audio_stream(self, *, reset_pyaudio=False):
+        """Swap the active input stream while preserving the best stream available."""
+        current_stream = self._stream
+        if reset_pyaudio:
+            self._close_stream(current_stream)
+            current_stream = None
+            self._recreate_pyaudio_backend()
+
+        new_stream = None
+        try:
+            new_stream, selected_device_info = self._open_audio_stream()
+            self._stream = new_stream
+            if current_stream and current_stream is not new_stream:
+                self._close_stream(current_stream)
+            return selected_device_info
+        except Exception:
+            if new_stream and new_stream is not self._stream:
+                self._close_stream(new_stream)
+            if not reset_pyaudio:
+                self._stream = current_stream
+            raise
+
+    def _cache_microphone_status(self, is_available, message, color):
+        """Cache microphone status for UI rechecks."""
+        self._mic_availability_checked = True
+        self._mic_error_details = (bool(is_available), str(message), str(color))
+        self._last_mic_check_time = time.time()
+
+    def _clear_stream_recovery_state(self):
+        """Clear pending stream recovery bookkeeping."""
+        self._pending_stream_recovery = False
+        self._stream_recovery_reason = ""
+        self._stream_recovery_message = ""
+        self._stream_recovery_next_attempt_at = 0.0
+        self._stream_recovery_started_at = 0.0
+        self._stream_recovery_attempts = 0
+        self._stream_recovery_error_emitted = False
+
+    def _recovery_backoff_seconds(self, attempt_number: int) -> float:
+        """Return retry delay for the next stream recovery attempt."""
+        if attempt_number <= 1:
+            return 0.1
+        if attempt_number == 2:
+            return 0.25
+        if attempt_number == 3:
+            return 0.5
+        if attempt_number == 4:
+            return 1.0
+        if attempt_number == 5:
+            return 2.0
+        return 5.0
+
+    def _is_recoverable_stream_error(self, error) -> bool:
+        """Return True when a stream error is likely due to device churn."""
+        error_no = getattr(error, "errno", None)
+        if error_no in {
+            getattr(pyaudio, "paDeviceUnavailable", -9985),
+            getattr(pyaudio, "paStreamIsStopped", -9983),
+        }:
+            return True
+
+        error_text = str(error).lower()
+        recoverable_patterns = [
+            "device unavailable",
+            "busy",
+            "no such device",
+            "device not found",
+            "stream is stopped",
+            "stream not open",
+            "invalid input device",
+            "unanticipated host error",
+        ]
+        return any(pattern in error_text for pattern in recoverable_patterns)
+
+    def _publish_recovery_error_state(self, message: str):
+        """Publish a persistent microphone error once fast retries are exhausted."""
+        self._cache_microphone_status(False, message, "red")
+        if self.on_status_update:
+            state_payload = {
+                "audioState": self._listening_state,
+                "isDictating": self._listening_state == "dictation",
+                "programActive": self._program_active,
+                "wakeWordEnabled": self._wake_word_enabled,
+                "microphoneError": message,
+            }
+            self._emit_state_update(state_payload)
+
+    def _schedule_stream_recovery(self, reason, message, *, immediate=False):
+        """Schedule automatic audio stream recovery without dropping the run loop."""
+        now = time.time()
+        is_new_recovery = not self._pending_stream_recovery
+
+        if is_new_recovery:
+            self._pending_stream_recovery = True
+            self._stream_recovery_started_at = now
+            self._stream_recovery_attempts = 0
+            self._stream_recovery_error_emitted = False
+            self._stream_recovery_initial_state = self._listening_state
+
+            if self._listening_state in {"dictation", "processing"}:
+                self._log_status(
+                    "Microphone connection changed. Current dictation was canceled while reconnecting audio.",
+                    "orange",
+                )
+            else:
+                self._log_status(message, "orange")
+
+            if self._listening_state != "preparing":
+                self.set_listening_state("preparing")
+            else:
+                self._log_status("Preparing to listen (initializing audio/Vosk)...", "grey")
+            self._close_stream()
+            self._mic_availability_checked = False
+            log_text(
+                "AUDIO_RECOVERY_SCHEDULED",
+                {
+                    "reason": reason,
+                    "message": message,
+                    "initialState": self._stream_recovery_initial_state,
+                    "immediate": bool(immediate),
+                },
+            )
+        elif immediate:
+            self._log_status(message, "orange")
+
+        self._stream_recovery_reason = str(reason or self._stream_recovery_reason)
+        self._stream_recovery_message = str(message or self._stream_recovery_message)
+        next_attempt = now if immediate else now + self._recovery_backoff_seconds(
+            self._stream_recovery_attempts + 1
+        )
+        if is_new_recovery:
+            self._stream_recovery_next_attempt_at = next_attempt
+        else:
+            self._stream_recovery_next_attempt_at = min(
+                self._stream_recovery_next_attempt_at or next_attempt,
+                next_attempt,
+            )
+
+    def _attempt_scheduled_recovery(self):
+        """Attempt one scheduled stream recovery if the timer has elapsed."""
+        if not self._pending_stream_recovery:
+            return
+
+        if self._stop_event.is_set():
+            self._clear_stream_recovery_state()
+            return
+
+        if self._listening_state == "inactive" and not self._program_active:
+            self._clear_stream_recovery_state()
+            return
+
+        now = time.time()
+        if now < self._stream_recovery_next_attempt_at:
+            return
+
+        attempt_number = self._stream_recovery_attempts + 1
+        try:
+            selected_device_info = self._replace_audio_stream(reset_pyaudio=True)
+            selected_device_name = (
+                selected_device_info.get("name", "Default")
+                if isinstance(selected_device_info, dict)
+                else "Default"
+            )
+            downtime = 0.0
+            if self._stream_recovery_started_at:
+                downtime = max(0.0, now - self._stream_recovery_started_at)
+
+            self._cache_microphone_status(
+                True,
+                f"Microphone '{selected_device_name}' is available",
+                "green",
+            )
+            self._clear_stream_recovery_state()
+            log_text(
+                "AUDIO_RECOVERY_SUCCESS",
+                {
+                    "device": self._last_stream_device_signature,
+                    "downtimeSeconds": round(downtime, 3),
+                },
+            )
+            self._log_status("Microphone reconnected.", "green")
+            self.set_listening_state("activation")
+        except Exception as recovery_error:
+            self._stream_recovery_attempts = attempt_number
+            next_delay = self._recovery_backoff_seconds(attempt_number)
+            self._stream_recovery_next_attempt_at = now + next_delay
+            error_message = (
+                f"Audio recovery failed: {recovery_error}"
+                if self._is_recoverable_stream_error(recovery_error)
+                else str(recovery_error)
+            )
+
+            if attempt_number >= 5 and not self._stream_recovery_error_emitted:
+                self._stream_recovery_error_emitted = True
+                self._publish_recovery_error_state(error_message)
+                self._log_status(error_message, "red")
+
+            log_text(
+                "AUDIO_RECOVERY_FAILED",
+                {
+                    "attempt": attempt_number,
+                    "reason": self._stream_recovery_reason,
+                    "error": str(recovery_error),
+                    "nextRetrySeconds": next_delay,
+                },
+            )
+
+    def _poll_default_input_route(self, *, force=False):
+        """Poll the system default input and trigger recovery when it changes."""
+        if (
+            (self._input_device_preference or "default").strip().lower()
+            not in {"", "default", "system"}
+        ):
+            return
+        if self._pending_stream_recovery or not self._stream:
+            return
+
+        now = time.time()
+        if not force and now - self._last_route_poll_time < self._route_poll_interval:
+            return
+        self._last_route_poll_time = now
+
+        try:
+            default_info = self._p.get_default_input_device_info()
+        except Exception as error:
+            log_text(
+                "AUDIO_ROUTE_POLL",
+                {"status": "default_lookup_failed", "error": str(error)},
+            )
+            return
+
+        current_signature = self._device_signature(None, default_info)
+        if self._last_stream_device_signature is None:
+            self._last_stream_device_signature = current_signature
+            return
+
+        if current_signature != self._last_stream_device_signature:
+            log_text(
+                "AUDIO_ROUTE_POLL",
+                {
+                    "status": "route_changed",
+                    "previous": self._last_stream_device_signature,
+                    "current": current_signature,
+                },
+            )
+            self._schedule_stream_recovery(
+                "route_changed",
+                "Microphone connection changed. Reconnecting audio...",
+                immediate=True,
+            )
+
+    def _check_main_loop_audio_health(self, sample_data) -> bool:
+        """Return True when the current audio frame requires stream recovery."""
+        is_essentially_silent = bool(np.all(sample_data == 0))
+        if is_essentially_silent:
+            self._main_loop_silent_count += 1
+            if self._main_loop_silent_count >= self._zero_frame_recovery_threshold:
+                self._schedule_stream_recovery(
+                    "zero_frames",
+                    "Audio input stopped producing sound. Reconnecting microphone...",
+                    immediate=True,
+                )
+                return True
+        else:
+            self._main_loop_silent_count = 0
+        return False
+
+    def _request_stream_switch(self):
+        if self._audio_thread and self._audio_thread.is_alive():
+            self._pending_stream_switch = True
+
+    def list_input_devices(self):
+        """Return available input devices for settings UI."""
+        if not PYAUDIO_AVAILABLE:
+            return [{"id": "default", "name": "Default", "isDefault": True}]
+
+        devices = []
+        default_index = None
+        try:
+            default_info = self._p.get_default_input_device_info()
+            default_index = int(default_info.get("index", -1))
+        except Exception:
+            default_index = None
+
+        devices.append({"id": "default", "name": "Default", "isDefault": True})
+        try:
+            device_count = int(self._p.get_device_count())
+        except Exception:
+            device_count = 0
+
+        for idx in range(device_count):
+            try:
+                info = self._p.get_device_info_by_index(idx)
+                if int(info.get("maxInputChannels", 0)) <= 0:
+                    continue
+                devices.append(
+                    {
+                        "id": str(idx),
+                        "name": info.get("name", f"Input {idx}"),
+                        "isDefault": idx == default_index,
+                    }
+                )
+            except Exception:
+                continue
+
+        return devices
+
+    def set_input_device_preference(self, device_id):
+        """Set preferred microphone device id and switch stream live when possible."""
+        normalized = "default" if device_id in (None, "", "default") else str(device_id)
+        if normalized == self._input_device_preference:
+            return
+
+        self._input_device_preference = normalized
+        self._mic_availability_checked = False
+        self._log_status(f"Microphone preference set to {normalized}.", "grey")
+        self._request_stream_switch()
 
     def load_vosk_model_async(self):
         """Loads the Vosk model in the background with thread safety."""
@@ -419,8 +1039,7 @@ class AudioHandler:
                         "programActive": False,
                         "microphoneError": availability_message
                     }
-                    json_state_payload = json.dumps(state_payload)
-                    self.on_status_update(f"STATE:{json_state_payload}", "STATE_MSG")
+                    self._emit_state_update(state_payload)
                 
                 return
             elif not is_available:
@@ -433,18 +1052,16 @@ class AudioHandler:
                 log_text("AUDIO_START_INFO", f"Microphone check passed: {availability_message}")
             
             log_text("AUDIO_START", "Opening audio stream...")
-            self._stream = self._p.open(
-                format=self._audio_format,
-                channels=self._channels,
-                rate=self._sample_rate,
-                input=True,
-                frames_per_buffer=self._frame_size,
-            )
-            self._stream.start_stream()
+            selected_device_info = self._replace_audio_stream(reset_pyaudio=False)
             
             # Keep programActive as False until fully ready
             # Only set to True when transitioning to activation state
-            self._log_status("Audio stream opened.", "grey")
+            selected_device_name = (
+                selected_device_info.get("name", "Default")
+                if isinstance(selected_device_info, dict)
+                else "Default"
+            )
+            self._log_status(f"Audio stream opened ({selected_device_name}).", "grey")
             log_text("AUDIO_START", "Audio stream opened successfully.")
 
             # Now start the main audio processing thread
@@ -503,12 +1120,7 @@ class AudioHandler:
             log_text("AUDIO_START_ERROR", detailed_message)
             
             # Keep program_active as False since microphone is not available
-            if self._stream:
-                try:
-                    self._stream.close()
-                except:
-                    pass
-                self._stream = None
+            self._close_stream()
             
             # Send detailed error state to UI
             if self.on_status_update:
@@ -518,8 +1130,7 @@ class AudioHandler:
                     "programActive": False,
                     "microphoneError": detailed_message
                 }
-                json_state_payload = json.dumps(state_payload)
-                self.on_status_update(f"STATE:{json_state_payload}", "STATE_MSG")
+                self._emit_state_update(state_payload)
 
     def stop(self):
         """Stops audio processing and cleans up resources."""
@@ -530,13 +1141,12 @@ class AudioHandler:
         )
         self._stop_event.set()
         self._program_active = False
+        self._clear_stream_recovery_state()
 
         # Stop the audio stream if it exists
         if hasattr(self, "_stream") and self._stream:
             try:
-                if self._stream.is_active():
-                    self._stream.stop_stream()
-                self._stream.close()
+                self._close_stream()
             except Exception as e:
                 log_text(
                     "AUDIO_STOP_ERROR",
@@ -615,6 +1225,7 @@ class AudioHandler:
         """Sets the overall program active state, affecting audio processing."""
         self._program_active = active
         if not active:
+            self._clear_stream_recovery_state()
             # If becoming inactive, force the state and status update
             self.set_listening_state("inactive")
         elif self._listening_state == "inactive":
@@ -678,15 +1289,7 @@ class AudioHandler:
                 "wakeWordEnabled": self._wake_word_enabled,
                 # currentMode is not managed by AudioHandler, frontend can manage/infer if needed
             }
-            try:
-                json_state_payload = json.dumps(state_payload)
-                # Use a special "color" to indicate this is a raw STATE message
-                self.on_status_update(f"STATE:{json_state_payload}", "STATE_MSG")
-            except Exception as e:
-                log_text(
-                    "AUDIO_HANDLER_STATE_SEND_ERROR",
-                    f"Error sending detailed STATE update: {e}",
-                )
+            self._emit_state_update(state_payload)
 
     def get_listening_state(self) -> str:
         """Returns the current listening state."""
@@ -823,14 +1426,7 @@ class AudioHandler:
                 "programActive": self._program_active,
                 "wakeWordEnabled": self._wake_word_enabled,
             }
-            try:
-                json_state_payload = json.dumps(state_payload)
-                self.on_status_update(f"STATE:{json_state_payload}", "STATE_MSG")
-            except Exception as e:
-                log_text(
-                    "AUDIO_HANDLER_STATE_SEND_ERROR",
-                    f"Error sending wake word state update: {e}",
-                )
+            self._emit_state_update(state_payload)
         # If enabling while already in activation, reassert activation to ensure Vosk loop proceeds
         if enabled_bool:
             # Keep program active when wake words are on
@@ -848,6 +1444,7 @@ class AudioHandler:
         self._voiced_frames = []
         self._triggered = False
         self._silence_start_time = None
+        self._reset_visualizer_state()
         
         # Reset conflict detection state
         self._silent_frame_count = 0  # Updated from _zero_frame_count
@@ -1027,8 +1624,7 @@ class AudioHandler:
         if not frame_bytes or len(frame_bytes) == 0:
             log_text("AUDIO_DEBUG", "Empty frame received during dictation")
             # Send zero amplitude for empty frames
-            if self.on_status_update:
-                self.on_status_update("AUDIO_AMP:0", "blue")
+            self._emit_audio_visual_feedback(0, None)
             return
         
         # Check if frame is the expected size
@@ -1036,8 +1632,7 @@ class AudioHandler:
         if len(frame_bytes) != expected_frame_size:
             log_text("AUDIO_DEBUG", f"Unexpected frame size: {len(frame_bytes)}, expected: {expected_frame_size}")
             # Send zero amplitude for malformed frames
-            if self.on_status_update:
-                self.on_status_update("AUDIO_AMP:0", "blue")
+            self._emit_audio_visual_feedback(0, None)
             return
             
         # Convert frame data first
@@ -1067,8 +1662,7 @@ class AudioHandler:
                         log_text("AUDIO_CONFLICT", f"Possible conflict: {conflict_info}")
                         
             # Send zero amplitude for silent frames
-            if self.on_status_update:
-                self.on_status_update("AUDIO_AMP:0", "blue")
+            self._emit_audio_visual_feedback(0, frame_data)
             return
         else:
             # Reset silent frame counter and conflict warning when we get valid data
@@ -1126,8 +1720,7 @@ class AudioHandler:
             log_text("AUDIO_DEBUG", f"Error calculating amplitude: {amp_error}")
             amplitude = 0
             
-        if self.on_status_update:
-            self.on_status_update(f"AUDIO_AMP:{int(amplitude)}", "blue")
+        self._emit_audio_visual_feedback(int(amplitude), frame_data)
 
         if not self._triggered:
             self._ring_buffer.append((frame_data, is_speech))
@@ -1208,49 +1801,60 @@ class AudioHandler:
                 self._log_memory_usage()
             except Exception as e:
                 print(f"Error in memory logging: {e}")
+
+            self._attempt_scheduled_recovery()
+            if self._pending_stream_recovery:
+                time.sleep(0.05)
+                continue
+
             if not self._program_active or self._listening_state == "inactive":
                 time.sleep(0.1)  # Sleep briefly if inactive
                 continue
 
+            self._poll_default_input_route()
+            if self._pending_stream_recovery:
+                time.sleep(0.05)
+                continue
+
+            if self._pending_stream_switch:
+                self._pending_stream_switch = False
+                try:
+                    selected_device_info = self._replace_audio_stream(reset_pyaudio=False)
+                    selected_device_name = (
+                        selected_device_info.get("name", "Default")
+                        if isinstance(selected_device_info, dict)
+                        else "Default"
+                    )
+                    self._log_status(f"Switched microphone to {selected_device_name}.", "green")
+                except Exception as switch_error:
+                    self._log_status(f"Failed to switch microphone: {switch_error}", "red")
+
             if not self._stream or not self._stream.is_active():
-                self._log_status("Audio stream is not active. Stopping loop.", "red")
-                break  # Exit loop if stream is bad
+                self._schedule_stream_recovery(
+                    "stream_inactive",
+                    "Audio input became unavailable. Reconnecting microphone...",
+                    immediate=True,
+                )
+                time.sleep(0.05)
+                continue
 
             try:
-                data = self._stream.read(self._frame_size, exception_on_overflow=False)
+                data = self._stream.read(self._stream_frame_size, exception_on_overflow=False)
+                processed_data = self._resample_frame_to_processing_rate(data)
                 
                 # Check for empty or problematic data reads
-                if not data:
+                if not processed_data:
                     log_text("AUDIO_DEBUG", "No data returned from audio stream read")
                     time.sleep(0.01)  # Brief pause before next read
                     continue
                     
                 # Check if we're getting silence consistently (possible microphone conflict)
-                if len(data) > 0:
+                if len(processed_data) > 0:
                     # Quick check for all-zero data or very low amplitude (Safari pattern)
-                    sample_data = np.frombuffer(data, dtype=np.int16)
-                    max_amplitude = np.abs(np.max(sample_data)) if sample_data.size > 0 else 0
-                    is_essentially_silent = (np.all(sample_data == 0))
-                    
-                    if is_essentially_silent:
-                        if not hasattr(self, '_main_loop_silent_count'):
-                            self._main_loop_silent_count = 0
-                        self._main_loop_silent_count += 1
-                        
-                        # If we get sustained silent data in the main loop, log it once for debugging
-                        if self._main_loop_silent_count > 1000 and not hasattr(self, '_main_loop_conflict_logged'):  # About 20 seconds - much longer threshold
-                            self._main_loop_conflict_logged = True
-                            log_text("AUDIO_DEBUG", f"Main loop sustained silence: {self._main_loop_silent_count} frames")
-                            
-                            # Check for conflicts but don't spam logs
-                            conflict_info = self._check_for_audio_conflicts()
-                            if conflict_info:
-                                log_text("AUDIO_DEBUG", f"Possible conflict: {conflict_info}")
-                    else:
-                        # Reset counters when we get valid data
-                        self._main_loop_silent_count = 0
-                        if hasattr(self, '_main_loop_conflict_logged'):
-                            del self._main_loop_conflict_logged
+                    sample_data = np.frombuffer(processed_data, dtype=np.int16)
+                    if self._check_main_loop_audio_health(sample_data):
+                        time.sleep(0.05)
+                        continue
 
                 if self._listening_state == "activation":
                     # Wait briefly for Vosk model to be ready if it isn't yet
@@ -1265,7 +1869,7 @@ class AudioHandler:
                     if (
                         self._recognizer and self._vosk_ready_event.is_set()
                     ):  # Check if recognizer exists and is ready
-                        if self._recognizer.AcceptWaveform(data):
+                        if self._recognizer.AcceptWaveform(processed_data):
                             result = self._recognizer.Result()
                             # --- Corrected Indentation Start ---
                             try:
@@ -1282,7 +1886,7 @@ class AudioHandler:
 
                 elif self._listening_state == "dictation":
                     # Process frame for VAD and buffering
-                    self._process_dictation_frame(data)
+                    self._process_dictation_frame(processed_data)
 
                 elif self._listening_state == "processing":
                     # While processing, we might want to discard audio or handle it differently
@@ -1295,23 +1899,27 @@ class AudioHandler:
                     # print("Input overflowed. Skipping frame.") # Debug log
                     pass  # Ignore overflow, continue reading
                 else:
-                    self._log_status(f"Audio read error: {e}", "red")
-                    log_text("AUDIO_READ_ERROR", f"IOError during audio read: {e}")
-                    
-                    # Check if this might be due to microphone conflicts
-                    if "Device unavailable" in str(e) or "busy" in str(e).lower():
-                        conflict_info = self._check_for_audio_conflicts()
-                        if conflict_info:
-                            log_text("AUDIO_CONFLICT", f"Audio read error likely due to conflict: {conflict_info}")
-                            self._log_status(f"Microphone conflict: {conflict_info}", "orange")
-                    
-                    # Consider stopping or attempting to restart the stream
-                    time.sleep(0.5)  # Avoid busy-looping on persistent errors
+                    if self._is_recoverable_stream_error(e):
+                        self._schedule_stream_recovery(
+                            "read_error",
+                            "Audio input encountered a device change. Reconnecting microphone...",
+                            immediate=True,
+                        )
+                    else:
+                        self._log_status(f"Audio read error: {e}", "red")
+                        log_text("AUDIO_READ_ERROR", f"IOError during audio read: {e}")
+                    time.sleep(0.1)  # Avoid busy-looping on persistent errors
             except Exception as e:
-                self._log_status(f"Error in audio loop: {e}", "red")
-                log_text("AUDIO_LOOP_ERROR", f"Unexpected error in audio loop: {e}")
-                # Decide if the error is fatal or recoverable
-                time.sleep(0.5)  # Pause before continuing
+                if self._is_recoverable_stream_error(e):
+                    self._schedule_stream_recovery(
+                        "loop_error",
+                        "Audio input encountered a device change. Reconnecting microphone...",
+                        immediate=True,
+                    )
+                else:
+                    self._log_status(f"Error in audio loop: {e}", "red")
+                    log_text("AUDIO_LOOP_ERROR", f"Unexpected error in audio loop: {e}")
+                time.sleep(0.1)  # Pause before continuing
 
     def check_microphone_availability(self, skip_test_stream=False):
         """
@@ -1324,15 +1932,17 @@ class AudioHandler:
             return False, "PyAudio not available (CI environment)", "orange"
             
         try:
-            # Check if default input device exists
-            try:
-                default_device = self._p.get_default_input_device_info()
-            except OSError as e:
-                return False, f"No default input device found: {str(e)}", "red"
-            
+            selected_device_index, selected_device_info = self._resolve_selected_input_device()
+            if selected_device_info is None:
+                try:
+                    selected_device_info = self._p.get_default_input_device_info()
+                    selected_device_index = None
+                except OSError as e:
+                    return False, f"No default input device found: {str(e)}", "red"
+
             # Get device info for detailed error reporting
-            device_name = default_device.get('name', 'Unknown Device')
-            max_channels = default_device.get('maxInputChannels', 0)
+            device_name = selected_device_info.get('name', 'Unknown Device')
+            max_channels = selected_device_info.get('maxInputChannels', 0)
             
             if max_channels == 0:
                 return False, f"Device '{device_name}' has no input channels", "red"
@@ -1343,33 +1953,55 @@ class AudioHandler:
             
             # Try to open a test stream to check for actual conflicts
             test_stream = None
+            candidate_rates = self._build_candidate_sample_rates(selected_device_info)
+            last_error = None
             try:
-                test_stream = self._p.open(
-                    format=self._audio_format,
-                    channels=min(self._channels, max_channels),
-                    rate=self._sample_rate,
-                    input=True,
-                    frames_per_buffer=self._frame_size,
-                    start=False  # Don't start immediately
-                )
-                
-                # Try to start the stream
-                test_stream.start_stream()
-                
-                # Test reading a small amount of data
-                test_data = test_stream.read(self._frame_size, exception_on_overflow=False)
-                
-                # Stop and close the test stream
-                test_stream.stop_stream()
-                test_stream.close()
-                
-                # Check if we got valid data
-                if len(test_data) == 0:
-                    return False, f"Device '{device_name}' returned no audio data", "orange"
-                    
-                # Only check for conflicts if we get no audio data at all
-                # Don't flag conflicts for normal background noise
-                return True, f"Microphone '{device_name}' is available", "green"
+                for candidate_rate in candidate_rates:
+                    candidate_frame_size = int(candidate_rate * self._frame_duration_ms / 1000)
+                    if candidate_frame_size <= 0:
+                        continue
+                    try:
+                        test_stream = self._p.open(
+                            format=self._audio_format,
+                            channels=min(self._channels, max_channels),
+                            rate=candidate_rate,
+                            input=True,
+                            frames_per_buffer=candidate_frame_size,
+                            start=False,  # Don't start immediately
+                            **({"input_device_index": selected_device_index} if selected_device_index is not None else {}),
+                        )
+                        test_stream.start_stream()
+                        test_data = test_stream.read(candidate_frame_size, exception_on_overflow=False)
+                        test_stream.stop_stream()
+                        test_stream.close()
+                        test_stream = None
+
+                        if len(test_data) == 0:
+                            continue
+                        if candidate_rate != self._sample_rate:
+                            return True, (
+                                f"Microphone '{device_name}' is available "
+                                f"(using {candidate_rate}Hz input with resampling)"
+                            ), "green"
+                        return True, f"Microphone '{device_name}' is available", "green"
+                    except Exception as candidate_error:
+                        last_error = candidate_error
+                        if test_stream:
+                            try:
+                                if hasattr(test_stream, 'is_active') and test_stream.is_active():
+                                    test_stream.stop_stream()
+                            except Exception:
+                                pass
+                            try:
+                                test_stream.close()
+                            except Exception:
+                                pass
+                            test_stream = None
+                        continue
+
+                if last_error is not None:
+                    raise last_error
+                return False, f"Device '{device_name}' returned no audio data", "orange"
                 
             except OSError as e:
                 error_msg = str(e).lower()
@@ -1399,7 +2031,7 @@ class AudioHandler:
                         if hasattr(test_stream, 'is_active') and test_stream.is_active():
                             test_stream.stop_stream()
                         test_stream.close()
-                    except:
+                    except Exception:
                         pass
                         
         except Exception as e:

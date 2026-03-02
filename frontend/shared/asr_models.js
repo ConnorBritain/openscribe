@@ -3,6 +3,7 @@
 
 export const ASR_MODELS = [
   { id: 'mlx-community/whisper-large-v3-turbo', name: 'Whisper (large-v3-turbo)' },
+  { id: 'mlx-community/distil-whisper-large-v3', name: 'Distil-Whisper (large-v3, fast)' },
   { id: 'mlx-community/parakeet-tdt-0.6b-v2', name: 'Parakeet-TDT-0.6B-v2' },
   { id: 'mlx-community/parakeet-tdt-0.6b-v3', name: 'Parakeet-TDT-0.6B-v3' },
   { id: 'mlx-community/Voxtral-Mini-3B-2507-bf16', name: 'Voxtral Mini 3B (bf16)' },

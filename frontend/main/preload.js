@@ -39,6 +39,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Re-paste text to Citrix via clipboard + Cmd+V
   repaste: (text) => ipcRenderer.send('repaste-text', text),
 
+  // Load the current UI mode (classic or handy)
+  loadUiMode: () => ipcRenderer.invoke('load-ui-mode'),
+
+  // Load shared Handy UI constants (width/height/bar geometry)
+  loadHandyUiConstants: () => ipcRenderer.invoke('load-handy-ui-constants'),
+
+  // Load shared IPC contract schema (message prefixes + payload states)
+  loadIpcContract: () => ipcRenderer.invoke('load-ipc-contract'),
+
   // Clean up listeners when they are no longer needed (important!)
   removeListener: (channel) => ipcRenderer.removeAllListeners(channel),
 

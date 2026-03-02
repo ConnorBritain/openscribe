@@ -3,11 +3,16 @@ Vocabulary API for Frontend-Backend Communication
 Provides functions that can be called from the main app to handle vocabulary operations
 """
 
-import json
-import os
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Callable, Dict, List, Optional, Any
 from .vocabulary_manager import get_vocabulary_manager
+from .medication_autolearn import (
+    MedicationAutoLearnService,
+    get_global_medication_autolearn_service,
+)
+
+
+CommandHandler = Callable[[Dict[str, Any]], Dict[str, Any]]
 
 
 class VocabularyAPI:
@@ -15,6 +20,26 @@ class VocabularyAPI:
     
     def __init__(self):
         self.vocab_manager = get_vocabulary_manager()
+        self._medication_autolearn_service: Optional[MedicationAutoLearnService] = None
+        self._command_handlers = self._build_command_handlers()
+
+    def set_medication_autolearn_service(self, service: Optional[MedicationAutoLearnService]) -> None:
+        """Inject a specific auto-learn service instance (primarily for tests)."""
+        self._medication_autolearn_service = service
+
+    def _get_medication_autolearn_service(self) -> MedicationAutoLearnService:
+        if self._medication_autolearn_service is not None:
+            return self._medication_autolearn_service
+
+        service = get_global_medication_autolearn_service()
+        if service is not None:
+            self._medication_autolearn_service = service
+            return service
+
+        raise RuntimeError(
+            "Medication auto-learn service is not initialized. "
+            "Start the application backend before calling this API."
+        )
     
     def add_term(self, correct_term: str, variations: List[str], category: str = "general") -> Dict[str, Any]:
         """Add a new custom term."""
@@ -268,74 +293,332 @@ class VocabularyAPI:
                 "error": str(e)
             }
 
+    @staticmethod
+    def _as_bool(value: Any, default: bool = False) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return default
+        if isinstance(value, (int, float)):
+            return bool(value)
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+        return default
 
-# Global API instance
-_vocabulary_api = None
+    def get_medication_mappings(
+        self,
+        search_filter: str = "",
+        include_inactive: bool = False,
+    ) -> Dict[str, Any]:
+        """Return medication mappings."""
+        try:
+            mappings = self.vocab_manager.get_medication_mappings(
+                search_filter=search_filter,
+                include_inactive=self._as_bool(include_inactive, default=False),
+            )
+            return {
+                "success": True,
+                "mappings": mappings,
+                "total_count": len(mappings),
+                "active_count": sum(1 for row in mappings if row.get("active", True)),
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+            }
 
-def get_vocabulary_api() -> VocabularyAPI:
-    """Get the global vocabulary API instance."""
-    global _vocabulary_api
-    if _vocabulary_api is None:
-        _vocabulary_api = VocabularyAPI()
-    return _vocabulary_api
+    def add_medication_mapping(
+        self,
+        observed: str,
+        canonical: str,
+        source: str = "manual",
+        confidence: str = "manual",
+        occurrence_count: int = 1,
+        entry_count: int = 1,
+        active: bool = True,
+    ) -> Dict[str, Any]:
+        """Add/update a medication mapping."""
+        try:
+            mapping = self.vocab_manager.add_medication_mapping(
+                observed=observed,
+                canonical=canonical,
+                source=source or "manual",
+                confidence=confidence or "manual",
+                occurrence_count=max(1, int(occurrence_count)),
+                entry_count=max(1, int(entry_count)),
+                active=self._as_bool(active, default=True),
+                save=True,
+            )
+            return {
+                "success": True,
+                "message": f"Saved medication mapping: '{mapping['observed']}' -> '{mapping['canonical']}'",
+                "mapping": mapping,
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+            }
 
+    def delete_medication_mapping(self, observed: str) -> Dict[str, Any]:
+        """Delete a medication mapping."""
+        try:
+            deleted = self.vocab_manager.delete_medication_mapping(observed)
+            if not deleted:
+                return {
+                    "success": False,
+                    "error": "Medication mapping not found",
+                }
+            return {
+                "success": True,
+                "message": f"Deleted medication mapping for '{observed}'",
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+            }
 
-# Convenience functions for direct calling from main app
-def handle_vocabulary_command(command: str, **kwargs) -> Dict[str, Any]:
-    """Handle vocabulary commands from the main application."""
-    api = get_vocabulary_api()
-    
-    if command == "add_term":
-        return api.add_term(
-            kwargs.get("correct_term", ""),
-            kwargs.get("variations", []),
-            kwargs.get("category", "general")
-        )
-    
-    elif command == "get_list":
-        return api.get_vocabulary_list(
-            kwargs.get("search", ""),
-            kwargs.get("category", "")
-        )
-    
-    elif command == "get_stats":
-        return api.get_vocabulary_stats()
-    
-    elif command == "edit_term":
-        return api.edit_term(
-            kwargs.get("term_key", ""),
-            kwargs.get("category"),
-            kwargs.get("additional_variations", []),
-            kwargs.get("remove_variations", [])
-        )
-    
-    elif command == "delete_term":
-        return api.delete_term(kwargs.get("term_key", ""))
-    
-    elif command == "import_template":
-        return api.import_template(kwargs.get("template_name", ""))
-    
-    elif command == "export":
-        return api.export_vocabulary(kwargs.get("filepath", ""))
-    
-    elif command == "clear_all":
-        return api.clear_vocabulary()
-    
-    elif command == "learn_correction":
-        return api.learn_correction(
-            kwargs.get("original", ""),
-            kwargs.get("corrected", ""),
-            kwargs.get("context", "")
-        )
-    
-    elif command == "get_suggestions":
-        return api.get_suggestions(
-            kwargs.get("text", ""),
-            kwargs.get("max_suggestions", 3)
-        )
-    
-    else:
+    def get_medication_review_queue(self, status_filter: str = "pending") -> Dict[str, Any]:
+        """Return medication review queue rows."""
+        try:
+            queue = self.vocab_manager.get_medication_review_queue(status_filter=status_filter or "pending")
+            return {
+                "success": True,
+                "reviews": queue,
+                "total_count": len(queue),
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+            }
+
+    def resolve_medication_review(
+        self,
+        review_id: str,
+        action: str,
+        canonical_override: str = "",
+    ) -> Dict[str, Any]:
+        """Accept/reject/dismiss a queued medication suggestion."""
+        try:
+            resolved = self.vocab_manager.resolve_medication_review(
+                review_id=review_id,
+                action=action,
+                canonical_override=canonical_override or "",
+            )
+            if not resolved:
+                return {
+                    "success": False,
+                    "error": "Review item not found",
+                }
+            return {
+                "success": True,
+                "message": f"Review item marked as {resolved.get('status', action)}",
+                "review": resolved,
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+            }
+
+    def import_medication_report(
+        self,
+        report_path: str,
+        min_confidence: str = "medium",
+        auto_import_confidence: str = "high",
+        min_occurrence_count: int = 1,
+        min_entry_count: int = 1,
+    ) -> Dict[str, Any]:
+        """Import medication mappings/review items from a markdown analysis report."""
+        try:
+            result = self.vocab_manager.import_medication_mappings_from_report(
+                report_path=report_path,
+                min_confidence=min_confidence or "medium",
+                auto_import_confidence=auto_import_confidence or "high",
+                min_occurrence_count=max(1, int(min_occurrence_count)),
+                min_entry_count=max(1, int(min_entry_count)),
+            )
+            return {
+                "success": True,
+                "message": (
+                    f"Processed {result.get('rows', 0)} rows "
+                    f"(imported {result.get('imported', 0)}, queued {result.get('queued', 0)}, skipped {result.get('skipped', 0)})."
+                ),
+                "result": result,
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+            }
+
+    def queue_medication_review(
+        self,
+        observed: str,
+        suggested: str,
+        confidence: str = "medium",
+        evidence: str = "",
+        occurrence_count: int = 1,
+        entry_count: int = 1,
+        sample_context: str = "",
+        source: str = "manual",
+    ) -> Dict[str, Any]:
+        """Create/update a manual medication review queue item."""
+        try:
+            review = self.vocab_manager.queue_medication_review(
+                observed=observed,
+                suggested=suggested,
+                confidence=confidence or "medium",
+                evidence=evidence or "",
+                occurrence_count=max(1, int(occurrence_count)),
+                entry_count=max(1, int(entry_count)),
+                sample_context=sample_context or "",
+                source=source or "manual",
+                save=True,
+            )
+            return {
+                "success": True,
+                "message": "Medication review suggestion queued",
+                "review": review,
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+            }
+
+    def get_medication_autolearn_status(self) -> Dict[str, Any]:
+        """Return medication auto-learn service status and last run summary."""
+        try:
+            service = self._get_medication_autolearn_service()
+            status_payload = service.get_status()
+            return {
+                "success": True,
+                "status": status_payload,
+                "lastSummary": status_payload.get("lastSummary"),
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+            }
+
+    def run_medication_autolearn_now(self) -> Dict[str, Any]:
+        """Trigger an immediate medication auto-learn run."""
+        try:
+            service = self._get_medication_autolearn_service()
+            summary = service.run_now()
+            status_payload = service.get_status()
+            return {
+                "success": True,
+                "summary": summary,
+                "status": status_payload,
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+            }
+
+    def _build_command_handlers(self) -> Dict[str, CommandHandler]:
         return {
-            "success": False,
-            "error": f"Unknown vocabulary command: {command}"
-        } 
+            "add_term": lambda kwargs: self.add_term(
+                kwargs.get("correct_term", ""),
+                kwargs.get("variations", []),
+                kwargs.get("category", "general"),
+            ),
+            "get_list": lambda kwargs: self.get_vocabulary_list(
+                kwargs.get("search", ""),
+                kwargs.get("category", ""),
+            ),
+            "get_stats": lambda kwargs: self.get_vocabulary_stats(),
+            "edit_term": lambda kwargs: self.edit_term(
+                kwargs.get("term_key", ""),
+                kwargs.get("category"),
+                kwargs.get("additional_variations", []),
+                kwargs.get("remove_variations", []),
+            ),
+            "delete_term": lambda kwargs: self.delete_term(kwargs.get("term_key", "")),
+            "import_template": lambda kwargs: self.import_template(kwargs.get("template_name", "")),
+            "export": lambda kwargs: self.export_vocabulary(kwargs.get("filepath", "")),
+            "clear_all": lambda kwargs: self.clear_vocabulary(),
+            "learn_correction": lambda kwargs: self.learn_correction(
+                kwargs.get("original", ""),
+                kwargs.get("corrected", ""),
+                kwargs.get("context", ""),
+            ),
+            "get_suggestions": lambda kwargs: self.get_suggestions(
+                kwargs.get("text", ""),
+                kwargs.get("max_suggestions", 3),
+            ),
+            "get_medication_mappings": lambda kwargs: self.get_medication_mappings(
+                kwargs.get("search", ""),
+                kwargs.get("include_inactive", False),
+            ),
+            "add_medication_mapping": lambda kwargs: self.add_medication_mapping(
+                kwargs.get("observed", ""),
+                kwargs.get("canonical", ""),
+                kwargs.get("source", "manual"),
+                kwargs.get("confidence", "manual"),
+                kwargs.get("occurrence_count", 1),
+                kwargs.get("entry_count", 1),
+                kwargs.get("active", True),
+            ),
+            "delete_medication_mapping": lambda kwargs: self.delete_medication_mapping(
+                kwargs.get("observed", "")
+            ),
+            "get_medication_review_queue": lambda kwargs: self.get_medication_review_queue(
+                kwargs.get("status", "pending")
+            ),
+            "resolve_medication_review": lambda kwargs: self.resolve_medication_review(
+                kwargs.get("review_id", ""),
+                kwargs.get("action", ""),
+                kwargs.get("canonical_override", ""),
+            ),
+            "import_medication_report": lambda kwargs: self.import_medication_report(
+                kwargs.get("report_path", ""),
+                kwargs.get("min_confidence", "medium"),
+                kwargs.get("auto_import_confidence", "high"),
+                kwargs.get("min_occurrence_count", 1),
+                kwargs.get("min_entry_count", 1),
+            ),
+            "queue_medication_review": lambda kwargs: self.queue_medication_review(
+                kwargs.get("observed", ""),
+                kwargs.get("suggested", ""),
+                kwargs.get("confidence", "medium"),
+                kwargs.get("evidence", ""),
+                kwargs.get("occurrence_count", 1),
+                kwargs.get("entry_count", 1),
+                kwargs.get("sample_context", ""),
+                kwargs.get("source", "manual"),
+            ),
+            "get_medication_autolearn_status": lambda kwargs: self.get_medication_autolearn_status(),
+            "run_medication_autolearn_now": lambda kwargs: self.run_medication_autolearn_now(),
+        }
+
+    def handle_command(self, command: str, **kwargs: Any) -> Dict[str, Any]:
+        """Handle a vocabulary command using instance-bound dispatch."""
+        handler = self._command_handlers.get(command)
+        if handler is None:
+            return {
+                "success": False,
+                "error": f"Unknown vocabulary command: {command}",
+            }
+        return handler(kwargs)
+
+
+def handle_vocabulary_command(
+    command: str,
+    *,
+    api: Optional[VocabularyAPI] = None,
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    """Compatibility wrapper for callers that still use module-level command dispatch."""
+    router = api or VocabularyAPI()
+    return router.handle_command(command, **kwargs)

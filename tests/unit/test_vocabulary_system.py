@@ -13,7 +13,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
 from vocabulary.vocabulary_manager import VocabularyManager
-from vocabulary.vocabulary_api import VocabularyAPI, handle_vocabulary_command
+from vocabulary.vocabulary_api import VocabularyAPI
 
 
 class TestVocabularyManager(unittest.TestCase):
@@ -139,6 +139,86 @@ class TestVocabularyManager(unittest.TestCase):
         self.assertGreater(len(suggestions), 0)
         self.assertEqual(suggestions[0]['suggested'], "azithromycin")
 
+    def test_medication_mapping_round_trip(self):
+        """Medication mappings should persist and be queryable."""
+        result = self.vocab_manager.add_medication_mapping(
+            observed="ozampic",
+            canonical="ozempic",
+            source="unit_test",
+            confidence="high"
+        )
+        self.assertEqual(result["observed"], "ozampic")
+        self.assertEqual(result["canonical"], "ozempic")
+
+        rows = self.vocab_manager.get_medication_mappings()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["observed"], "ozampic")
+        self.assertEqual(rows[0]["canonical"], "ozempic")
+
+    def test_medication_mapping_applies_in_medication_context(self):
+        """Explicit medication mappings should only apply in medication-like context."""
+        self.vocab_manager.add_medication_mapping("ozampic", "ozempic")
+
+        corrected_text, corrections = self.vocab_manager.apply_medical_corrections(
+            "Patient is taking ozampic 1 mg weekly."
+        )
+        self.assertEqual(corrected_text, "Patient is taking ozempic 1 mg weekly.")
+        self.assertEqual(len(corrections), 1)
+        self.assertEqual(corrections[0]["source"], "mapping")
+
+    def test_medication_review_accept_creates_mapping(self):
+        """Accepting a review item should create a medication mapping."""
+        queued = self.vocab_manager.queue_medication_review(
+            observed="mounjora",
+            suggested="mounjaro",
+            confidence="medium",
+            source="unit_test"
+        )
+        self.assertEqual(queued["status"], "pending")
+
+        resolved = self.vocab_manager.resolve_medication_review(
+            review_id=queued["id"],
+            action="accept",
+            canonical_override="mounjaro"
+        )
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved["status"], "accepted")
+
+        rows = self.vocab_manager.get_medication_mappings()
+        self.assertTrue(any(row["observed"] == "mounjora" for row in rows))
+
+    def test_stale_writer_save_does_not_clobber_accepted_reviews(self):
+        """Concurrent/stale writers should not drop accepted review history or mappings."""
+        stale_manager = VocabularyManager(config_dir=self.test_dir)
+
+        queued = self.vocab_manager.queue_medication_review(
+            observed="ozampic",
+            suggested="ozempic",
+            confidence="medium",
+            source="unit_test"
+        )
+        self.vocab_manager.resolve_medication_review(
+            review_id=queued["id"],
+            action="accept",
+            canonical_override="ozempic"
+        )
+
+        stale_manager.add_medication_mapping(
+            observed="manjaro",
+            canonical="mounjaro",
+            source="unit_test",
+            confidence="high",
+        )
+
+        reloaded = VocabularyManager(config_dir=self.test_dir)
+        mappings = reloaded.get_medication_mappings()
+        observed_terms = {row["observed"] for row in mappings}
+        self.assertIn("ozampic", observed_terms)
+        self.assertIn("manjaro", observed_terms)
+
+        accepted_reviews = reloaded.get_medication_review_queue(status_filter="accepted")
+        self.assertTrue(any(item.get("observed") == "ozampic" for item in accepted_reviews))
+
 
 class TestVocabularyAPI(unittest.TestCase):
     """Test the vocabulary API interface."""
@@ -193,7 +273,7 @@ class TestVocabularyAPI(unittest.TestCase):
     def test_command_handler(self):
         """Test the command handler interface."""
         # Test add term command
-        result = handle_vocabulary_command(
+        result = self.api.handle_command(
             "add_term",
             correct_term="azithromycin",
             variations=["as throw my sin"],
@@ -203,7 +283,7 @@ class TestVocabularyAPI(unittest.TestCase):
         self.assertTrue(result['success'])
         
         # Test get list command
-        result = handle_vocabulary_command("get_list")
+        result = self.api.handle_command("get_list")
         
         self.assertTrue(result['success'])
         self.assertEqual(len(result['terms']), 1)
@@ -211,10 +291,25 @@ class TestVocabularyAPI(unittest.TestCase):
     def test_error_handling(self):
         """Test error handling in API."""
         # Test unknown command
-        result = handle_vocabulary_command("unknown_command")
+        result = self.api.handle_command("unknown_command")
         
         self.assertFalse(result['success'])
         self.assertIn("Unknown vocabulary command", result['error'])
+
+    def test_medication_mapping_api(self):
+        """Test adding and listing medication mappings via API."""
+        add_result = self.api.add_medication_mapping(
+            observed="vyvance",
+            canonical="vyvanse",
+            source="unit_test",
+            confidence="high"
+        )
+        self.assertTrue(add_result["success"])
+
+        list_result = self.api.get_medication_mappings()
+        self.assertTrue(list_result["success"])
+        self.assertEqual(len(list_result["mappings"]), 1)
+        self.assertEqual(list_result["mappings"][0]["canonical"], "vyvanse")
 
 
 class TestVocabularyIntegration(unittest.TestCase):

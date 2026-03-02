@@ -6,6 +6,8 @@ const { store } = require('./electron_app_init'); // Assuming this is still need
 const path = require('path');
 const { app } = require('electron');
 const fs = require('fs');
+const ipcContract = require('./ipc_contract');
+const { buildPythonConfigFromStore } = require('./python_config_payload');
 
 let pythonShell = null;
 let actualAvailableLLMs = []; // To store models received from Python
@@ -95,8 +97,12 @@ function startPythonShell(onMessage, onError, onClose) {
     pythonProcess.stdout.on('data', (data) => {
       const messages = data.toString().split('\n').filter(msg => msg.trim());
       messages.forEach(message => {
-        // Only log non-AUDIO_AMP messages to reduce console spam
-        if (!message.startsWith('AUDIO_AMP:')) {
+        // Only log non-audio meter messages to reduce console spam
+        if (
+          !ipcContract.hasPrefix(message, 'audioMetrics') &&
+          !ipcContract.hasPrefix(message, 'audioAmplitudeLegacy') &&
+          !ipcContract.hasPrefix(message, 'audioLevelsLegacy')
+        ) {
           console.log('[ElectronPython] Raw message from Python:', `'${message}'`);
         }
         if (onMessage) onMessage(message);
@@ -139,10 +145,22 @@ function startPythonShell(onMessage, onError, onClose) {
       // Further reduce console spam: only log important top-level types
       if (typeof message === 'string') {
         const trimmed = message.trim();
-        const importantPrefixes = ['PYTHON_BACKEND_READY', 'GET_CONFIG', 'MODELS_LIST:', 'MODEL_SELECTED:', 'MODELS:', 'DICTATION_PREVIEW:', 'FINAL_TRANSCRIPT:', 'TRANSCRIPTION:'];
+        const importantPrefixes = [
+          'PYTHON_BACKEND_READY',
+          'GET_CONFIG',
+          'MODELS_LIST:',
+          'MODEL_SELECTED:',
+          'MODELS:',
+          'DICTATION_PREVIEW:',
+          ipcContract.getPrefix('finalTranscript'),
+          'TRANSCRIPTION:'
+        ];
         const isImportant = importantPrefixes.some(pfx => trimmed.startsWith(pfx));
         if (isImportant) {
-          const noTruncate = trimmed.startsWith('FINAL_TRANSCRIPT:') || trimmed.startsWith('DICTATION_PREVIEW:') || trimmed.startsWith('TRANSCRIPTION:');
+          const noTruncate =
+            trimmed.startsWith(ipcContract.getPrefix('finalTranscript')) ||
+            trimmed.startsWith('DICTATION_PREVIEW:') ||
+            trimmed.startsWith('TRANSCRIPTION:');
           console.log('[ElectronPython]', noTruncate ? trimmed : trimmed.substring(0, 300));
         }
       }
@@ -183,10 +201,18 @@ function startPythonBackend(mainWindow) {
 
   pythonShell.on('message', function (message) {
     // Reduce console spam: log only a whitelist of prefixes
-    const importantPrefixes = ['PYTHON_BACKEND_READY', 'GET_CONFIG', 'FINAL_TRANSCRIPT:', 'TRANSCRIPTION:'];
+    const importantPrefixes = [
+      'PYTHON_BACKEND_READY',
+      'GET_CONFIG',
+      ipcContract.getPrefix('finalTranscript'),
+      'TRANSCRIPTION:'
+    ];
     const isImportant = importantPrefixes.some(pfx => message.startsWith(pfx));
     if (isImportant) {
-      const noTruncate = message.startsWith('FINAL_TRANSCRIPT:') || message.startsWith('DICTATION_PREVIEW:') || message.startsWith('TRANSCRIPTION:');
+      const noTruncate =
+        message.startsWith(ipcContract.getPrefix('finalTranscript')) ||
+        message.startsWith('DICTATION_PREVIEW:') ||
+        message.startsWith('TRANSCRIPTION:');
       console.log(`[ElectronPython] ${noTruncate ? message : message.substring(0, 300)}`);
     }
 
@@ -200,14 +226,7 @@ function startPythonBackend(mainWindow) {
     // Handle GET_CONFIG request from Python
     if (trimmedMessage === 'GET_CONFIG') {
       console.log('[ElectronPython] Processing GET_CONFIG');
-      const pythonConfig = {
-        wakeWords: store.get('wakeWords', { dictate: [] }),
-        filterFillerWords: store.get('filterFillerWords', true),
-        fillerWords: store.get('fillerWords', []),
-        autoStopOnSilence: store.get('autoStopOnSilence', true),
-        wakeWordEnabled: store.get('wakeWordEnabled', true),
-        selectedAsrModel: store.get('selectedAsrModel') // Ensure ASR model is also sent
-      };
+      const pythonConfig = buildPythonConfigFromStore(store);
       if (pythonShell && pythonShell.stdin && !pythonShell.stdin.destroyed) {
         pythonShell.send(`CONFIG:${JSON.stringify(pythonConfig)}\n`);
         console.log('[ElectronPython] Sent CONFIG to Python.');
@@ -218,52 +237,14 @@ function startPythonBackend(mainWindow) {
     }
 
     // Handle STATE messages from Python
-    if (trimmedMessage.startsWith('STATE:')) {
+    if (ipcContract.hasPrefix(trimmedMessage, 'state')) {
     // Verbose; suppress logging of every STATE message to keep console clean
       try {
-        const stateContent = trimmedMessage.substring('STATE:'.length);
-
-        // Find the end of the JSON by looking for the closing brace
-        let jsonEndIndex = -1;
-        let braceCount = 0;
-        let inString = false;
-        let escapeNext = false;
-
-        for (let i = 0; i < stateContent.length; i++) {
-          const char = stateContent[i];
-
-          if (escapeNext) {
-            escapeNext = false;
-            continue;
-          }
-
-          if (char === '\\') {
-            escapeNext = true;
-            continue;
-          }
-
-          if (char === '"') {
-            inString = !inString;
-            continue;
-          }
-
-          if (!inString) {
-            if (char === '{') {
-              braceCount++;
-            } else if (char === '}') {
-              braceCount--;
-              if (braceCount === 0) {
-                jsonEndIndex = i + 1;
-                break;
-              }
-            }
-          }
+        const parsedState = ipcContract.parsePrefixedJson(trimmedMessage, 'state');
+        const state = ipcContract.validateStatePayload(parsedState);
+        if (!state) {
+          throw new Error('Invalid STATE payload');
         }
-
-        const stateJson = jsonEndIndex > 0 ? stateContent.substring(0, jsonEndIndex) : stateContent;
-        // Suppress echoing full state JSON to console to reduce noise
-
-        const state = JSON.parse(stateJson);
         // const mainWin = mainWindow; // mainWindow is from the startPythonBackend closure
 
         // Keep tray icon in sync with audio state
@@ -301,7 +282,9 @@ function startPythonBackend(mainWindow) {
                 audioState: state.audioState,
                 programActive: state.programActive,
                 currentMode: state.currentMode,
-                wakeWordEnabled: state.wakeWordEnabled
+                wakeWordEnabled: state.wakeWordEnabled,
+                dictationLifecycle: state.dictationLifecycle,
+                dictationLifecycleReason: state.dictationLifecycleReason
               };
               mainWindow.webContents.send('ui-update', dictationUpdateData);
             } catch (error) {
@@ -342,9 +325,9 @@ function startPythonBackend(mainWindow) {
     }
 
     // Handle STATUS messages for tray icon updates
-    if (trimmedMessage.startsWith('STATUS:')) {
+    if (ipcContract.hasPrefix(trimmedMessage, 'status')) {
       const { setTrayIconByState } = require('./electron_tray');
-      const statusContent = trimmedMessage.substring('STATUS:'.length);
+      const statusContent = ipcContract.stripPrefix(trimmedMessage, 'status') || '';
       const firstColonIndex = statusContent.indexOf(':');
 
       if (firstColonIndex !== -1) {
@@ -394,7 +377,12 @@ function startPythonBackend(mainWindow) {
     }
 
     // Fall-through for other messages - forward to renderer quietly
-    if (process.env.CT_ELECTRON_VERBOSE === '1' && !trimmedMessage.startsWith('AUDIO_AMP:')) {
+    if (
+      process.env.CT_ELECTRON_VERBOSE === '1' &&
+      !ipcContract.hasPrefix(trimmedMessage, 'audioMetrics') &&
+      !ipcContract.hasPrefix(trimmedMessage, 'audioAmplitudeLegacy') &&
+      !ipcContract.hasPrefix(trimmedMessage, 'audioLevelsLegacy')
+    ) {
       console.log(`[ElectronPython] Forwarding unhandled message to renderer: '${trimmedMessage}'`);
     }
     // const mainWin = mainWindow; // mainWindow is from the startPythonBackend closure

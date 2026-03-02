@@ -1,9 +1,9 @@
 // renderer_ipc.js
-// Handles IPC communication with Electron main and Python backend
+// Handles IPC communication with Electron main and Python backend.
 
 import { logMessage } from './renderer_utils.js';
 import { updateStatusIndicator, handleStatusMessage, showRetranscribeProgress, hideRetranscribeProgress } from './renderer_state.js';
-import { amplitudes } from './renderer_ui.js';
+import { amplitudes, handyLevels } from './renderer_ui.js';
 import {
   beginTranscriptSession,
   updateActiveTranscriptStatus,
@@ -13,11 +13,25 @@ import {
   handleQuickRetranscribeResult,
   setRetranscribingState
 } from './renderer_transcript_log.js';
+import {
+  hasPrefix,
+  stripPrefix,
+  parsePrefixedJson,
+  validateAudioMetricsPayload,
+  validateStatePayload,
+  deriveLifecycleFromAudioState
+} from './ipc_contract.js';
+import {
+  applyTranscriptVisibility,
+  resolveTranscriptCollapseState,
+  shouldResizeWindowForActiveMode
+} from './renderer_ui_mode_strategy.js';
 
 const MIN_WINDOW_HEIGHT = 124;
 const EXPANDED_WINDOW_HEIGHT = 320;
 
 let lastAudioState = 'inactive';
+let lastLifecycleState = 'idle';
 let lastIsDictating = false;
 let isResponseCollapsed = false;
 
@@ -26,39 +40,62 @@ function hasTranscriptEntries() {
   return !!(stream && stream.querySelector('.transcript-entry'));
 }
 
+function mapLifecycleToTranscriptStatus(lifecycle, audioState, isDictating) {
+  if (lifecycle === 'recording' || isDictating || audioState === 'dictation') {
+    return 'recording';
+  }
+  if (
+    lifecycle === 'stopping' ||
+    lifecycle === 'transcribing' ||
+    lifecycle === 'inserting' ||
+    audioState === 'processing'
+  ) {
+    return 'processing';
+  }
+  if (lifecycle === 'listening' || audioState === 'activation' || audioState === 'preparing') {
+    return 'listening';
+  }
+  return null;
+}
+
 function processDictationState(rawState) {
   if (!rawState) {
     return;
   }
 
-  const audioState = rawState.audioState || (rawState.isDictating ? 'dictation' : 'inactive');
-  const isDictating = !!rawState.isDictating;
-  const normalizedState = {
+  const baseState = {
     programActive: typeof rawState.programActive === 'boolean' ? rawState.programActive : true,
-    audioState,
-    isDictating,
+    audioState: rawState.audioState || (rawState.isDictating ? 'dictation' : 'inactive'),
+    isDictating: !!rawState.isDictating,
     currentMode: rawState.currentMode !== undefined ? rawState.currentMode : null,
-    wakeWordEnabled: rawState.wakeWordEnabled !== false
+    wakeWordEnabled: rawState.wakeWordEnabled !== false,
+    dictationLifecycle: rawState.dictationLifecycle
   };
-
-  console.log('[RendererIPC] Dictation state update:', normalizedState);
+  const normalizedState = validateStatePayload(baseState) || baseState;
+  const audioState = normalizedState.audioState || 'inactive';
+  const isDictating = !!normalizedState.isDictating;
+  const lifecycle = normalizedState.dictationLifecycle || deriveLifecycleFromAudioState(audioState);
 
   updateStatusIndicator(normalizedState);
 
-  if (isDictating && !lastIsDictating) {
+  const enteredRecording = lifecycle === 'recording' && lastLifecycleState !== 'recording';
+  const leftRecording = lifecycle !== 'recording' && lastLifecycleState === 'recording';
+
+  if (enteredRecording || (isDictating && !lastIsDictating)) {
     beginTranscriptSession();
     adjustWindowHeight(false, { forceState: 'collapsed' });
-  } else if (!isDictating && lastIsDictating) {
+  } else if (leftRecording || (!isDictating && lastIsDictating)) {
     adjustWindowHeight(false, { forceState: 'expanded' });
   }
 
-  if (isDictating) {
+  const transcriptStatus = mapLifecycleToTranscriptStatus(lifecycle, audioState, isDictating);
+  if (transcriptStatus === 'recording') {
     updateActiveTranscriptStatus('recording');
     adjustWindowHeight(false, { forceState: 'collapsed' });
-  } else if (audioState === 'processing') {
+  } else if (transcriptStatus === 'processing') {
     updateActiveTranscriptStatus('processing');
     adjustWindowHeight(false, { forceState: 'expanded' });
-  } else if (audioState === 'activation' || audioState === 'preparing') {
+  } else if (transcriptStatus === 'listening') {
     updateActiveTranscriptStatus('listening');
     if (!isDictating) {
       const hasEntries = hasTranscriptEntries();
@@ -66,17 +103,18 @@ function processDictationState(rawState) {
     }
   }
 
-  const enteredActivation = (audioState === 'activation' || audioState === 'preparing') &&
-    lastAudioState !== audioState;
-  const enteredProcessing = audioState === 'processing' && lastAudioState !== 'processing';
-  const becameInactive = audioState === 'inactive' && lastAudioState !== 'inactive';
+  const enteredListening = lifecycle === 'listening' && lastLifecycleState !== 'listening';
+  const enteredTranscribing =
+    (lifecycle === 'stopping' || lifecycle === 'transcribing' || lifecycle === 'inserting') &&
+    !(lastLifecycleState === 'stopping' || lastLifecycleState === 'transcribing' || lastLifecycleState === 'inserting');
+  const becameInactive = lifecycle === 'idle' && lastLifecycleState !== 'idle';
 
-  if (enteredActivation && !isDictating) {
+  if (enteredListening && !isDictating) {
     const hasEntries = hasTranscriptEntries();
     adjustWindowHeight(hasEntries, { forceState: hasEntries ? 'expanded' : 'collapsed' });
   }
 
-  if (enteredProcessing && !isDictating) {
+  if (enteredTranscribing && !isDictating) {
     adjustWindowHeight(false, { forceState: 'expanded' });
   }
 
@@ -87,22 +125,7 @@ function processDictationState(rawState) {
 
   lastIsDictating = isDictating;
   lastAudioState = audioState;
-}
-
-function applyTranscriptVisibility(collapsed) {
-  const responseArea = document.getElementById('response-area');
-  const appContainer = document.getElementById('app-container');
-  if (!responseArea) {
-    return;
-  }
-
-  isResponseCollapsed = collapsed;
-  responseArea.dataset.collapsed = collapsed ? 'true' : 'false';
-  responseArea.style.display = collapsed ? 'none' : 'flex';
-
-  if (appContainer) {
-    appContainer.classList.toggle('is-transcript-collapsed', collapsed);
-  }
+  lastLifecycleState = lifecycle;
 }
 
 function setResponseText(text) {
@@ -116,34 +139,36 @@ function setResponseText(text) {
 function adjustWindowHeight(hasTranscript = false, options = {}) {
   const { forceState = null } = options;
 
-  if (!window.electronAPI || typeof window.electronAPI.resizeWindow !== 'function') {
-    return;
-  }
-
   const responseArea = document.getElementById('response-area');
   if (!responseArea) {
     return;
   }
 
-  if (forceState === 'collapsed') {
-    applyTranscriptVisibility(true);
-  } else if (forceState === 'expanded') {
-    applyTranscriptVisibility(false);
+  const transcriptStream = document.getElementById('transcript-stream');
+  const hasVisibleEntries = !!(transcriptStream && transcriptStream.querySelector('.transcript-entry'));
+
+  const collapsed = resolveTranscriptCollapseState({
+    forceState,
+    hasEntries: hasTranscript || hasVisibleEntries,
+    currentCollapsed: isResponseCollapsed
+  });
+  isResponseCollapsed = collapsed;
+  applyTranscriptVisibility(collapsed);
+
+  if (!shouldResizeWindowForActiveMode()) {
+    return;
   }
 
-  const isCollapsed = responseArea.dataset.collapsed === 'true';
+  if (!window.electronAPI || typeof window.electronAPI.resizeWindow !== 'function') {
+    return;
+  }
 
-  const transcriptStream = document.getElementById('transcript-stream');
-  const hasVisibleEntries = !isCollapsed &&
-    !!(transcriptStream && transcriptStream.querySelector('.transcript-entry'));
-
-  const responseHeight = isCollapsed ? 0 : responseArea.scrollHeight;
+  const responseHeight = collapsed ? 0 : responseArea.scrollHeight;
   const headerHeight = (document.getElementById('waveform-area')?.offsetHeight || 0)
     + (document.getElementById('control-bar')?.offsetHeight || 0)
     + 20;
 
-  const effectiveHasTranscript = !isCollapsed && (hasTranscript || hasVisibleEntries);
-
+  const effectiveHasTranscript = !collapsed && (hasTranscript || hasVisibleEntries);
   const desiredHeight = effectiveHasTranscript
     ? Math.max(EXPANDED_WINDOW_HEIGHT, responseHeight + headerHeight)
     : Math.max(MIN_WINDOW_HEIGHT, headerHeight);
@@ -154,9 +179,47 @@ function adjustWindowHeight(hasTranscript = false, options = {}) {
   }
 }
 
+function pushAmplitude(amplitudeValue) {
+  if (!Number.isFinite(amplitudeValue)) {
+    return;
+  }
+  const normalizedAmplitude = Math.max(0, Math.min(100, Math.round(amplitudeValue)));
+  amplitudes.push(normalizedAmplitude);
+  if (amplitudes.length > 100) {
+    amplitudes.shift();
+  }
+}
+
+function applyHandyLevels(levels, smooth = true) {
+  if (!Array.isArray(levels)) {
+    return;
+  }
+  for (let i = 0; i < handyLevels.length; i++) {
+    const target = Number(levels[i]);
+    const normalizedTarget = Number.isFinite(target) ? Math.min(Math.max(target, 0), 1) : 0;
+    handyLevels[i] = smooth
+      ? ((handyLevels[i] * 0.7) + (normalizedTarget * 0.3))
+      : normalizedTarget;
+  }
+}
+
+function applyAudioMetricsPayload(payload) {
+  const normalizedPayload = validateAudioMetricsPayload(payload);
+  if (!normalizedPayload) {
+    return;
+  }
+  pushAmplitude(Number(normalizedPayload.amplitude));
+  applyHandyLevels(normalizedPayload.levels, true);
+}
+
 export function registerIPCHandlers() {
   setTranscriptHeightCallback(adjustWindowHeight);
-  applyTranscriptVisibility(false);
+  isResponseCollapsed = resolveTranscriptCollapseState({
+    forceState: null,
+    hasEntries: false,
+    currentCollapsed: false
+  });
+  applyTranscriptVisibility(isResponseCollapsed);
 
   if (window.electronAPI && typeof window.electronAPI.on === 'function') {
     window.electronAPI.on('ui-update', (payload) => {
@@ -168,13 +231,18 @@ export function registerIPCHandlers() {
 
   if (window.electronAPI && window.electronAPI.handleFromPython) {
     window.electronAPI.handleFromPython((message) => {
-      if (!message.startsWith('AUDIO_AMP:')) {
+      if (
+        !hasPrefix(message, 'audioMetrics') &&
+        !hasPrefix(message, 'audioAmplitudeLegacy') &&
+        !hasPrefix(message, 'audioLevelsLegacy') &&
+        !hasPrefix(message, 'state')
+      ) {
         console.log('[IPC_FROM_PYTHON_RAW]', message);
         logMessage(message, 'py');
       }
 
-      if (message.startsWith('STATUS:')) {
-        const statusPayload = message.substring(7);
+      if (hasPrefix(message, 'status')) {
+        const statusPayload = stripPrefix(message, 'status') || '';
         const firstColon = statusPayload.indexOf(':');
         if (firstColon !== -1) {
           const color = statusPayload.substring(0, firstColon);
@@ -183,56 +251,65 @@ export function registerIPCHandlers() {
         } else {
           handleStatusMessage(statusPayload, 'grey');
         }
-      } else if (message.startsWith('FINAL_TRANSCRIPT:')) {
-        const transcriptText = message.substring(17);
+      } else if (hasPrefix(message, 'finalTranscript')) {
+        const transcriptText = stripPrefix(message, 'finalTranscript') || '';
         setResponseText(transcriptText);
-      } else if (message.startsWith('STATE:')) {
-        try {
-          const stateData = JSON.parse(message.substring(6));
+      } else if (hasPrefix(message, 'state')) {
+        const stateData = validateStatePayload(parsePrefixedJson(message, 'state'));
+        if (stateData) {
           processDictationState(stateData);
-        } catch (error) {
-          logMessage(`Error parsing STATE JSON: ${error}`, 'error');
+        } else {
+          logMessage('Error parsing STATE payload.', 'error');
         }
-      } else if (message.startsWith('AUDIO_AMP:')) {
-        const amplitudeValue = parseInt(message.split(':')[1], 10);
-        if (!Number.isNaN(amplitudeValue)) {
-          amplitudes.push(amplitudeValue);
-          if (amplitudes.length > 100) {
-            amplitudes.shift();
-          }
+      } else if (hasPrefix(message, 'audioMetrics')) {
+        const payload = parsePrefixedJson(message, 'audioMetrics');
+        if (payload) {
+          applyAudioMetricsPayload(payload);
+        } else {
+          logMessage('Error parsing AUDIO_METRICS payload.', 'error');
         }
-      } else if (message.startsWith('HISTORY_ENTRY:')) {
-        try {
-          const entryData = JSON.parse(message.substring(14));
+      } else if (hasPrefix(message, 'audioAmplitudeLegacy')) {
+        const amplitudeValue = parseInt((stripPrefix(message, 'audioAmplitudeLegacy') || '0').trim(), 10);
+        pushAmplitude(amplitudeValue);
+      } else if (hasPrefix(message, 'audioLevelsLegacy')) {
+        const payload = parsePrefixedJson(message, 'audioLevelsLegacy');
+        if (payload) {
+          applyHandyLevels(payload, true);
+        } else {
+          logMessage('Error parsing AUDIO_LEVELS payload.', 'error');
+        }
+      } else if (hasPrefix(message, 'historyEntry')) {
+        const entryData = parsePrefixedJson(message, 'historyEntry');
+        if (entryData) {
           setLastHistoryEntry(entryData);
-        } catch (error) {
-          logMessage(`Error parsing HISTORY_ENTRY JSON: ${error}`, 'error');
+        } else {
+          logMessage('Error parsing HISTORY_ENTRY payload.', 'error');
         }
-      } else if (message.startsWith('RETRANSCRIBE_START:')) {
-        const payload = message.substring(19);
+      } else if (hasPrefix(message, 'retranscribeStart')) {
+        const payload = stripPrefix(message, 'retranscribeStart') || '';
         if (payload.startsWith('error:')) {
           showRetranscribeProgress(payload.substring(6), true);
         } else {
           showRetranscribeProgress(payload, false);
           setRetranscribingState(true);
         }
-      } else if (message.startsWith('RETRANSCRIBE_END:')) {
+      } else if (hasPrefix(message, 'retranscribeEnd')) {
         hideRetranscribeProgress();
         setRetranscribingState(false);
-      } else if (message.startsWith('RETRANSCRIBE_QUICK_RESULT:')) {
-        try {
-          const resultData = JSON.parse(message.substring(26));
+      } else if (hasPrefix(message, 'retranscribeQuickResult')) {
+        const resultData = parsePrefixedJson(message, 'retranscribeQuickResult');
+        if (resultData) {
           handleQuickRetranscribeResult(resultData);
-        } catch (error) {
-          logMessage(`Error parsing RETRANSCRIBE_QUICK_RESULT JSON: ${error}`, 'error');
+        } else {
+          logMessage('Error parsing RETRANSCRIBE_QUICK_RESULT payload.', 'error');
         }
-      } else if (message.startsWith('HOTKEYS:')) {
-        logMessage(`Received Hotkeys: ${message.substring(8)}`);
+      } else if (hasPrefix(message, 'hotkeys')) {
+        logMessage(`Received Hotkeys: ${stripPrefix(message, 'hotkeys') || ''}`);
       } else if (message === 'BACKEND_READY') {
         logMessage('Python backend is ready.');
       } else if (message === 'SHUTDOWN_SIGNAL') {
         logMessage('Python backend is shutting down.');
-        updateStatusIndicator({ audioState: 'inactive', programActive: false });
+        updateStatusIndicator({ audioState: 'inactive', programActive: false, dictationLifecycle: 'idle' });
       }
     });
   }
@@ -242,12 +319,13 @@ export function registerIPCHandlers() {
       logMessage(errorMessage, 'error');
       console.log('Python Stderr received in renderer:', errorMessage);
       if (errorMessage.toLowerCase().includes('error')) {
-        const statusDot = document.getElementById('status-dot');
-        if (statusDot) {
-          statusDot.style.backgroundColor = '#ff3b30';
-          statusDot.style.boxShadow = '0 0 5px #ff3b30';
-        }
+        const dots = [document.getElementById('status-dot'), document.getElementById('handy-status-dot')].filter(Boolean);
+        dots.forEach((dot) => {
+          dot.style.backgroundColor = '#ff3b30';
+          dot.style.boxShadow = '0 0 5px #ff3b30';
+        });
       }
     });
   }
 }
+

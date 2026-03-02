@@ -12,12 +12,12 @@ import time
 import unittest
 import urllib.error
 import urllib.request
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from src.api_server import LocalAPIServer
+from src.api_server import APIRequestHandler, LocalAPIServer, QuietThreadingHTTPServer
 
 class TestLocalAPIServer(unittest.TestCase):
     """Test the LocalAPIServer and APIRequestHandler."""
@@ -263,6 +263,30 @@ class TestLocalAPIServer(unittest.TestCase):
             line = response.readline().decode("utf-8")
             self.assertTrue(line.startswith("data: "))
             self.assertIn("\"audioState\"", line)
+
+    def test_quiet_server_suppresses_expected_disconnect_tracebacks(self):
+        """Expected client disconnects should not delegate to default traceback logging."""
+        server = QuietThreadingHTTPServer(("127.0.0.1", 0), APIRequestHandler)
+        try:
+            err = ConnectionResetError(54, "Connection reset by peer")
+            with patch("src.api_server.sys.exc_info", return_value=(ConnectionResetError, err, None)):
+                with patch("src.api_server.ThreadingHTTPServer.handle_error") as mock_handle_error:
+                    server.handle_error(None, ("127.0.0.1", 58835))
+            mock_handle_error.assert_not_called()
+        finally:
+            server.server_close()
+
+    def test_quiet_server_preserves_unexpected_tracebacks(self):
+        """Unexpected server exceptions should still delegate to default error handling."""
+        server = QuietThreadingHTTPServer(("127.0.0.1", 0), APIRequestHandler)
+        try:
+            err = RuntimeError("boom")
+            with patch("src.api_server.sys.exc_info", return_value=(RuntimeError, err, None)):
+                with patch("src.api_server.ThreadingHTTPServer.handle_error") as mock_handle_error:
+                    server.handle_error(None, ("127.0.0.1", 58835))
+            mock_handle_error.assert_called_once_with(None, ("127.0.0.1", 58835))
+        finally:
+            server.server_close()
 
 if __name__ == "__main__":
     unittest.main()

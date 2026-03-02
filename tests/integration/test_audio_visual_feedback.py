@@ -11,6 +11,7 @@ import unittest
 import sys
 import os
 import time
+import json
 from unittest.mock import Mock, patch, MagicMock
 from pathlib import Path
 import numpy as np
@@ -28,10 +29,14 @@ class TestAudioVisualFeedback(unittest.TestCase):
     def setUp(self):
         """Set up test environment."""
         self.project_root = Path(__file__).parent.parent.parent
+
+    def _parse_audio_metrics(self, message):
+        self.assertTrue(message.startswith("AUDIO_METRICS:"))
+        return json.loads(message.split(":", 1)[1])
         
     @patch('pyaudio.PyAudio')
     def test_audio_amplitude_messages_sent(self, mock_pyaudio):
-        """Test that AUDIO_AMP messages are still sent for waveform visualization."""
+        """Test that AUDIO_METRICS messages are sent for waveform visualization."""
         
         try:
             from src.audio.audio_handler import AudioHandler
@@ -41,8 +46,8 @@ class TestAudioVisualFeedback(unittest.TestCase):
         # Mock status update callback to capture amplitude messages
         amplitude_messages = []
         def mock_status_update(message, color):
-            if message.startswith("AUDIO_AMP:"):
-                amplitude_messages.append(message)
+            if message.startswith("AUDIO_METRICS:"):
+                amplitude_messages.append(self._parse_audio_metrics(message))
         
         with patch('pyaudio.PyAudio'):
             handler = AudioHandler()
@@ -59,15 +64,16 @@ class TestAudioVisualFeedback(unittest.TestCase):
             
             # Should have received amplitude message
             self.assertEqual(len(amplitude_messages), 1)
-            self.assertTrue(amplitude_messages[0].startswith("AUDIO_AMP:"))
+            self.assertIn("amplitude", amplitude_messages[0])
+            self.assertIn("levels", amplitude_messages[0])
             
             # Extract amplitude value
-            amp_value = int(amplitude_messages[0].split(":")[1])
+            amp_value = int(amplitude_messages[0]["amplitude"])
             self.assertGreaterEqual(amp_value, 0)
             self.assertLessEqual(amp_value, 100)
 
     def test_frontend_amplitude_processing(self):
-        """Test that frontend can process AUDIO_AMP messages."""
+        """Test that frontend can process AUDIO_METRICS messages."""
         
         # Read the renderer IPC file to verify amplitude processing exists
         ipc_file = self.project_root / "frontend" / "shared" / "renderer_ipc.js"
@@ -77,14 +83,14 @@ class TestAudioVisualFeedback(unittest.TestCase):
             content = f.read()
             
         # Verify amplitude processing logic exists
-        self.assertIn("AUDIO_AMP:", content)
+        self.assertIn("audioMetrics", content)
+        self.assertIn("applyAudioMetricsPayload", content)
+        self.assertIn("pushAmplitude", content)
         self.assertIn("amplitudes.push", content)
-        self.assertIn("amplitudes.shift", content)
-        self.assertIn("parseInt", content)
 
     @patch('pyaudio.PyAudio')
     def test_zero_amplitude_for_silent_frames(self, mock_pyaudio):
-        """Test that silent frames generate AUDIO_AMP:0 messages."""
+        """Test that silent frames generate AUDIO_METRICS payloads with amplitude 0."""
         
         try:
             from src.audio.audio_handler import AudioHandler
@@ -93,8 +99,8 @@ class TestAudioVisualFeedback(unittest.TestCase):
             
         amplitude_messages = []
         def mock_status_update(message, color):
-            if message.startswith("AUDIO_AMP:"):
-                amplitude_messages.append(message)
+            if message.startswith("AUDIO_METRICS:"):
+                amplitude_messages.append(self._parse_audio_metrics(message))
         
         with patch('pyaudio.PyAudio'):
             handler = AudioHandler()
@@ -110,10 +116,11 @@ class TestAudioVisualFeedback(unittest.TestCase):
             
             # Should receive zero amplitude
             self.assertEqual(len(amplitude_messages), 1)
-            self.assertEqual(amplitude_messages[0], "AUDIO_AMP:0")
+            self.assertEqual(amplitude_messages[0]["amplitude"], 0)
+            self.assertEqual(len(amplitude_messages[0]["levels"]), 16)
 
     def test_main_py_amplitude_forwarding(self):
-        """Test that main.py forwards AUDIO_AMP messages to frontend."""
+        """Test that main.py forwards AUDIO_METRICS messages to frontend."""
         
         main_file = self.project_root / "main.py"
         self.assertTrue(main_file.exists(), "main.py not found")
@@ -122,8 +129,8 @@ class TestAudioVisualFeedback(unittest.TestCase):
             content = f.read()
             
         # Verify amplitude message forwarding exists
-        self.assertIn('message.startswith("AUDIO_AMP:")', content)
-        self.assertIn("print(message, flush=True)", content)
+        self.assertIn('is_prefixed_message(message, "audioMetrics")', content)
+        self.assertIn('print(ipc_contract.with_prefix("audioMetrics", metrics_payload), flush=True)', content)
 
     @patch('pyaudio.PyAudio')
     def test_amplitude_calculation_accuracy(self, mock_pyaudio):
@@ -136,8 +143,8 @@ class TestAudioVisualFeedback(unittest.TestCase):
             
         amplitude_messages = []
         def mock_status_update(message, color):
-            if message.startswith("AUDIO_AMP:"):
-                amplitude_messages.append(message)
+            if message.startswith("AUDIO_METRICS:"):
+                amplitude_messages.append(self._parse_audio_metrics(message))
         
         with patch('pyaudio.PyAudio'):
             handler = AudioHandler()
@@ -164,7 +171,7 @@ class TestAudioVisualFeedback(unittest.TestCase):
                 
                 # Check amplitude value
                 self.assertEqual(len(amplitude_messages), 1)
-                amp_value = int(amplitude_messages[0].split(":")[1])
+                amp_value = int(amplitude_messages[0]["amplitude"])
                 
                 # Should be close to expected (within ±5)
                 self.assertGreaterEqual(amp_value, expected_amp - 5)
@@ -182,6 +189,7 @@ class TestAudioVisualFeedback(unittest.TestCase):
             handler = AudioHandler()
             handler._listening_state = "dictation"
             handler._triggered = True  # Simulate active recording
+            handler._auto_stop_on_silence = True
             
             # Mock the audio processing callback
             processing_called = []
@@ -314,11 +322,11 @@ class TestAudioVisualFeedback(unittest.TestCase):
                 content = f.read()
                 
             # Check for waveform rendering functions
-            self.assertIn("canvas", content.lower())
-            # These are likely function names or variable names related to waveform
+            self.assertIn("renderClassicWaveformFrame", content)
+            self.assertIn("requestAnimationFrame", content)
             
     def test_electron_message_forwarding_preserved(self):
-        """Test that Electron still forwards AUDIO_AMP messages to renderer after log cleanup."""
+        """Test that Electron still forwards audio metrics to renderer after log cleanup."""
         
         electron_python_file = self.project_root / "electron" / "electron_python.js"
         self.assertTrue(electron_python_file.exists(), "electron_python.js not found")
@@ -330,13 +338,11 @@ class TestAudioVisualFeedback(unittest.TestCase):
         self.assertIn("mainWindow.webContents.send('from-python'", content)
         self.assertIn("forwarding", content.lower())
         
-        # Verify AUDIO_AMP messages are not filtered out
-        # (They should reach the renderer for waveform visualization)
-        self.assertNotIn("filter.*AUDIO_AMP", content)
-        self.assertNotIn("skip.*AUDIO_AMP", content)
+        # Verify audioMetrics messages are explicitly handled in the forwarding path
+        self.assertIn("audioMetrics", content)
 
-    def test_renderer_audio_amp_handling_preserved(self):
-        """Test that renderer can still handle AUDIO_AMP messages after log cleanup."""
+    def test_renderer_audio_metrics_handling_preserved(self):
+        """Test that renderer can still handle AUDIO_METRICS messages after log cleanup."""
         
         renderer_ipc_file = self.project_root / "frontend" / "shared" / "renderer_ipc.js"
         self.assertTrue(renderer_ipc_file.exists(), "renderer_ipc.js not found")
@@ -344,10 +350,65 @@ class TestAudioVisualFeedback(unittest.TestCase):
         with open(renderer_ipc_file, 'r') as f:
             content = f.read()
             
-        # Verify AUDIO_AMP handling logic exists
-        self.assertIn("AUDIO_AMP:", content)
+        # Verify audio metrics handling logic exists
+        self.assertIn("audioMetrics", content)
+        self.assertIn("applyAudioMetricsPayload", content)
         self.assertIn("amplitudes.push", content)
         self.assertIn("amplitudes.shift", content)
+
+    @patch('pyaudio.PyAudio')
+    def test_audio_metrics_resume_after_recovery(self, mock_pyaudio):
+        """Test that audio metrics still flow after a recovery cycle."""
+
+        try:
+            from src.audio.audio_handler import AudioHandler
+        except ImportError:
+            self.skipTest("AudioHandler not available for testing")
+
+        metrics_messages = []
+
+        def mock_status_update(message, color):
+            if message.startswith("AUDIO_METRICS:"):
+                metrics_messages.append(self._parse_audio_metrics(message))
+
+        with patch('pyaudio.PyAudio'):
+            handler = AudioHandler()
+            handler.on_status_update = mock_status_update
+            handler._program_active = True
+            handler._listening_state = "activation"
+
+            def replace_stream(*, reset_pyaudio=False):
+                handler._stream = Mock()
+                handler._last_stream_device_signature = {
+                    "preference": "default",
+                    "resolvedIndex": 0,
+                    "name": "Recovered Mic",
+                    "maxInputChannels": 1,
+                    "defaultSampleRate": 16000,
+                }
+                return {
+                    "name": "Recovered Mic",
+                    "maxInputChannels": 1,
+                    "defaultSampleRate": 16000.0,
+                    "index": 0,
+                }
+
+            with patch.object(handler, '_replace_audio_stream', side_effect=replace_stream):
+                handler._schedule_stream_recovery(
+                    "route_changed",
+                    "Microphone connection changed. Reconnecting audio...",
+                    immediate=True,
+                )
+                handler._stream_recovery_next_attempt_at = 0.0
+                handler._attempt_scheduled_recovery()
+
+            handler._listening_state = "dictation"
+            frame_size = 480
+            test_audio = np.array([400, -400] * (frame_size // 2), dtype=np.int16)
+            handler._process_dictation_frame(test_audio.tobytes())
+
+            self.assertTrue(metrics_messages)
+            self.assertGreater(metrics_messages[-1]["amplitude"], 0)
 
 if __name__ == '__main__':
     unittest.main() 

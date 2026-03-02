@@ -1,4 +1,14 @@
 /* Reset and Base Styles */
+:root {
+    --handy-width: 172px;
+    --handy-height: 36px;
+    --handy-radius: 18px;
+    --handy-bar-width: 6px;
+    --handy-bar-gap: 3px;
+    --handy-bar-min-height: 4px;
+    --handy-bar-max-height: 20px;
+}
+
 body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     margin: 0;
@@ -907,80 +917,6 @@ body {
     color: #7a7a80;
 }
 
-.transcript-entry__toolbar {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    background: rgba(20, 20, 24, 0.85);
-    border: 1px solid #45454c;
-    border-radius: 6px;
-    padding: 8px 10px;
-    font-size: 12px;
-    color: #d8d8de;
-}
-
-.transcript-entry__toolbar.is-hidden {
-    display: none;
-}
-
-.transcript-entry__selection-preview {
-    font-family: monospace;
-    font-size: 12px;
-    background: rgba(255, 255, 255, 0.08);
-    padding: 4px 6px;
-    border-radius: 4px;
-    color: #f2f2f7;
-}
-
-.transcript-entry__toolbar-actions {
-    display: flex;
-    gap: 8px;
-    align-items: center;
-}
-
-.transcript-entry__learn-input {
-    flex: 1 1 auto;
-    padding: 6px 10px;
-    border-radius: 4px;
-    border: 1px solid rgba(77, 211, 122, 0.45);
-    background: rgba(18, 24, 34, 0.95);
-    color: #f0fff7;
-    font-size: 12px;
-}
-
-.transcript-entry__learn-input::placeholder {
-    color: rgba(200, 248, 214, 0.6);
-}
-
-.transcript-entry__learn-button {
-    padding: 6px 12px;
-    font-size: 12px;
-    border-radius: 4px;
-    border: 1px solid #4dd37a;
-    background: rgba(77, 211, 122, 0.15);
-    color: #4dd37a;
-    cursor: pointer;
-    transition: all 0.2s ease;
-}
-
-.transcript-entry__learn-button:disabled {
-    opacity: 0.45;
-    cursor: default;
-}
-
-.transcript-entry__learn-button:not(:disabled):hover {
-    background: rgba(77, 211, 122, 0.3);
-}
-
-.transcript-entry__toolbar-feedback {
-    font-size: 11px;
-    color: #8dd7aa;
-}
-
-.transcript-entry__toolbar-feedback.is-error {
-    color: #ff7d7d;
-}
-
 
 .is-hidden {
     display: none !important;
@@ -1254,4 +1190,242 @@ body {
 /* Adjust main content when banner is visible */
 body.conflict-banner-visible {
     padding-top: 60px;
+}
+
+/* Handy overlay mode */
+#activity-pill {
+    display: none;
+}
+
+.activity-pill__left {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.activity-pill__middle {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+}
+
+.activity-pill__right {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+}
+
+#handy-bars {
+    display: none;
+    align-items: end;
+    justify-content: center;
+    gap: var(--handy-bar-gap);
+    height: 24px;
+    overflow: hidden;
+}
+
+.handy-bar {
+    width: var(--handy-bar-width);
+    background: #ffe5ee;
+    max-height: var(--handy-bar-max-height);
+    min-height: var(--handy-bar-min-height);
+    border-radius: 2px;
+    transition: height 60ms ease-out, opacity 120ms ease-out;
+    opacity: 0.2;
+}
+
+.activity-icon {
+    width: 24px;
+    height: 24px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+    flex-shrink: 0;
+    transition: opacity 120ms ease-out;
+}
+
+.activity-icon img {
+    width: 24px;
+    height: 24px;
+    display: none;
+    pointer-events: none;
+}
+
+.activity-icon.show-ear .activity-icon__ear {
+    display: block;
+}
+
+.activity-icon.show-brain .activity-icon__brain {
+    display: block;
+}
+
+.activity-icon.is-listening {
+    opacity: 0.56;
+}
+
+.activity-icon.is-recording,
+.activity-icon.is-transcribing,
+.activity-icon.is-error {
+    opacity: 1;
+}
+
+.activity-label {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    color: #fff;
+    font-size: 12px;
+    letter-spacing: 0.01em;
+    z-index: 2;
+    pointer-events: none;
+    white-space: nowrap;
+    opacity: 0.82;
+}
+
+#handy-processing-indicator {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    color: #fff;
+    font-size: 12px;
+    z-index: 2;
+    pointer-events: none;
+    white-space: nowrap;
+    animation: transcribing-pulse 1.5s infinite ease-in-out;
+}
+
+@keyframes transcribing-pulse {
+    0%,
+    100% {
+        opacity: 0.6;
+    }
+    50% {
+        opacity: 1;
+    }
+}
+
+#handy-status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background-color: #8e8e93;
+    box-shadow: none;
+    display: inline-block;
+    transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.pill-cancel-button {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: none;
+    background: transparent;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    cursor: pointer;
+    transition: background-color 150ms ease-out, transform 100ms ease-out;
+}
+
+.pill-cancel-button__icon {
+    width: 24px;
+    height: 24px;
+    display: block;
+}
+
+.pill-cancel-button:hover {
+    background: rgba(250, 162, 202, 0.2);
+    transform: scale(1.05);
+}
+
+.pill-cancel-button:active {
+    transform: scale(0.95);
+}
+
+html.ui-mode-handy,
+body.ui-mode-handy {
+    margin: 0;
+    padding: 0;
+    width: var(--handy-width);
+    height: var(--handy-height);
+    min-width: var(--handy-width);
+    min-height: var(--handy-height);
+    max-width: var(--handy-width);
+    max-height: var(--handy-height);
+    overflow: hidden;
+    background: transparent !important;
+}
+
+body.ui-mode-handy #app-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    width: var(--handy-width);
+    height: var(--handy-height);
+    min-width: var(--handy-width);
+    min-height: var(--handy-height);
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+body.ui-mode-handy #mic-conflict-banner {
+    display: none !important;
+}
+
+body.ui-mode-handy #waveform-area,
+body.ui-mode-handy #control-bar,
+body.ui-mode-handy #response-area {
+    display: none !important;
+}
+
+body.ui-mode-handy #activity-pill {
+    height: var(--handy-height);
+    width: var(--handy-width);
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: 6px;
+    padding: 6px;
+    background: #000000cc;
+    border-radius: var(--handy-radius);
+    box-sizing: border-box;
+    opacity: 1;
+}
+
+body.ui-mode-handy #handy-status-dot {
+    display: none;
+}
+
+body.ui-mode-handy .activity-pill__left {
+    gap: 0;
+}
+
+body.ui-mode-handy #activity-pill.state-recording .activity-label {
+    opacity: 0;
+}
+
+body.ui-mode-handy #activity-pill.state-recording #handy-bars {
+    display: flex;
+}
+
+body.ui-mode-handy #activity-pill.state-transcribing .activity-label,
+body.ui-mode-handy #activity-pill.state-retranscribing .activity-label,
+body.ui-mode-handy #activity-pill.state-error .activity-label {
+    opacity: 0;
+}
+
+body.ui-mode-handy #activity-pill.state-transcribing #handy-processing-indicator,
+body.ui-mode-handy #activity-pill.state-retranscribing #handy-processing-indicator,
+body.ui-mode-handy #activity-pill.state-error #handy-processing-indicator {
+    display: inline-block;
+}
+
+body.ui-mode-handy #activity-pill.state-recording .pill-cancel-button {
+    display: inline-flex;
 }

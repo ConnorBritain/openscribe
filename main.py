@@ -8,7 +8,8 @@ import subprocess
 import io
 import wave
 import uuid
-from typing import Any, Dict, Optional
+from pathlib import Path
+from typing import Any, Callable, Dict, Optional, Tuple
 
 # Make Quartz imports conditional for CI compatibility
 try:
@@ -77,10 +78,14 @@ except ImportError:
 
 # Import refactored modules and config
 from src.config import config
-from src.utils.utils import log_text
+from src.utils.utils import log_event, log_text
 from src.audio.audio_handler import AudioHandler
 from src.transcription_handler import TranscriptionHandler
+from src.secondary_asr_worker import SecondaryAsrWorkerClient
 from src.hotkey_manager import HotkeyManager
+from src import ipc_contract
+from src.dictation_lifecycle import DictationLifecycleStateMachine
+from src.text_insertion.safe_text_inserter import SafeTextInserter
 from src.memory_monitor import (
     MemoryMonitor,
     start_memory_monitoring,
@@ -107,6 +112,11 @@ from src.history.history_manager import HistoryManager
 from src import llm_postprocessor
 from src.api_server import LocalAPIServer
 from src.dictation_session_store import DictationSessionStore
+from src.vocabulary.medication_autolearn import (
+    MedicationAutoLearnService,
+    set_global_medication_autolearn_service,
+)
+from src.vocabulary.vocabulary_api import VocabularyAPI
 
 def _sanitize_for_legacy_clipboards(text: str) -> str:
     """Replace non-breaking hyphens, non-breaking spaces, smart quotes, and narrow no-break spaces.
@@ -188,11 +198,24 @@ class Application:
         self._bg_retranscribe_cancel = threading.Event()
         self._bg_retranscribe_thread: Optional[threading.Thread] = None
         self._bg_retranscribe_result: Optional[Dict[str, Any]] = None
+        self._secondary_worker_enabled = True
+        self._secondary_asr_worker: Optional[SecondaryAsrWorkerClient] = None
+        timeout_raw = os.getenv("CT_SECONDARY_ASR_TIMEOUT_SECONDS", "240").strip()
+        try:
+            self._secondary_worker_timeout_seconds = max(30.0, float(timeout_raw))
+        except ValueError:
+            self._secondary_worker_timeout_seconds = 240.0
         self.history_manager = HistoryManager()
         self.api_server: Optional[LocalAPIServer] = None
         self._session_store = DictationSessionStore(
             max_results=self.MAX_SESSION_RESULTS,
             ttl_seconds=self.SESSION_RESULT_TTL_SECONDS,
+        )
+        self._lifecycle = DictationLifecycleStateMachine(initial_state="idle")
+        self._text_inserter = SafeTextInserter(
+            paste_callback=send_text_to_citrix,
+            status_callback=self._handle_status_update,
+            log_callback=log_text,
         )
 
         # --- Initialize Handlers ---
@@ -220,12 +243,152 @@ class Application:
             on_hotkey_callback=self._handle_hotkey,
             on_status_update_callback=self._handle_status_update,
         )
+        self._apply_hotkey_settings_from_store()
+        self.medication_autolearn_service = MedicationAutoLearnService(
+            settings_enabled_getter=lambda: settings_manager.get_setting("medicationAutoLearnEnabled", True),
+            busy_check=self._is_dictation_or_processing_active,
+            on_run_complete=self._handle_medication_autolearn_summary,
+            state_path="data/medication_autolearn_state.json",
+            history_path=self.history_manager.history_log,
+            lexicon_path="data/medical_lexicon.json",
+            user_vocabulary_path=str(Path("data/user_vocabulary.json")),
+        )
+        self.medication_autolearn_service.set_runtime_enabled(
+            bool(settings_manager.get_setting("medicationAutoLearnEnabled", True))
+        )
+        set_global_medication_autolearn_service(self.medication_autolearn_service)
+        self.vocabulary_api = VocabularyAPI()
+        self.vocabulary_api.set_medication_autolearn_service(self.medication_autolearn_service)
+        self._stdin_exact_handlers: Dict[str, Callable[[str], bool]] = {}
+        self._stdin_prefix_handlers: Tuple[Tuple[str, Callable[[str], bool]], ...] = ()
+        self._initialize_stdin_dispatch()
 
         # --- Initial Setup ---
         self._handle_status_update("Application initializing...", "grey")
 
     def begin_api_dictation_session(self, *, suppress_paste: bool = False, source: Optional[str] = None) -> str:
         return self._session_store.begin_session(suppress_paste=suppress_paste, source=source)
+
+    def _build_shortcut_settings_payload(self, config_data: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+        source = config_data or {}
+        return {
+            "transcribe": str(source.get("transcribeShortcut") or settings_manager.get_setting("transcribeShortcut", "Option+Space")),
+            "stopTranscribing": str(source.get("stopTranscribingShortcut") or settings_manager.get_setting("stopTranscribingShortcut", "Cmd+Shift+S")),
+            "retranscribeBackup": str(source.get("retranscribeBackupShortcut") or settings_manager.get_setting("retranscribeBackupShortcut", "Ctrl+Option+R")),
+        }
+
+    def _apply_hotkey_settings_from_store(self, config_data: Optional[Dict[str, Any]] = None) -> None:
+        try:
+            shortcut_payload = self._build_shortcut_settings_payload(config_data)
+            self.hotkey_manager.update_shortcut_bindings(shortcut_payload)
+        except Exception as error:
+            log_text("HOTKEY_CONFIG", f"Failed to apply hotkey settings: {error}")
+
+    def apply_runtime_config(self, received_config: Dict[str, Any]) -> None:
+        """Apply CONFIG payload updates from Electron and persist settings."""
+        if "wakeWords" in received_config:
+            self.audio_handler.update_wake_words(received_config["wakeWords"])
+            settings_manager.set_setting("wakeWords", received_config["wakeWords"], save=False)
+        else:
+            log_text("CONFIG_WARN", "Wake words not found in received config.")
+
+        if "selectedAsrModel" in received_config:
+            try:
+                self.transcription_handler.update_selected_asr_model(received_config["selectedAsrModel"])
+                settings_manager.set_setting(
+                    "selectedAsrModel",
+                    received_config["selectedAsrModel"],
+                    save=False,
+                )
+                log_text("CONFIG", f"ASR model set to: {received_config['selectedAsrModel']}")
+            except Exception as e:
+                log_text("CONFIG_ERROR", f"Failed to update ASR model: {e}")
+        else:
+            log_text("CONFIG_WARN", "selectedAsrModel not found in received config.")
+
+        if "fillerWords" in received_config:
+            text_processor.set_filler_words(received_config["fillerWords"])
+            log_text("CONFIG", f"Filler words updated: {received_config['fillerWords']}")
+
+        if "autoStopOnSilence" in received_config:
+            auto_stop = bool(received_config["autoStopOnSilence"])
+            settings_manager.set_setting("autoStopOnSilence", auto_stop, save=False)
+            self.audio_handler.set_auto_silence_stop_enabled(auto_stop)
+            log_text("CONFIG", f"Auto-stop on silence set to {auto_stop}")
+
+        if "wakeWordEnabled" in received_config:
+            wake_word_enabled = bool(received_config["wakeWordEnabled"])
+            settings_manager.set_setting("wakeWordEnabled", wake_word_enabled, save=False)
+            self.audio_handler.set_wake_word_enabled(wake_word_enabled)
+            log_text("CONFIG", f"Wake word listening enabled: {wake_word_enabled}")
+
+        if "medicationAutoLearnEnabled" in received_config:
+            auto_learn_enabled = bool(received_config["medicationAutoLearnEnabled"])
+            settings_manager.set_setting("medicationAutoLearnEnabled", auto_learn_enabled, save=False)
+            self.medication_autolearn_service.set_runtime_enabled(auto_learn_enabled)
+            log_text("CONFIG", f"Medication auto-learn enabled: {auto_learn_enabled}")
+
+        if "secondaryAsrModel" in received_config:
+            raw_secondary_model = received_config.get("secondaryAsrModel")
+            normalized_secondary_model = (
+                str(raw_secondary_model).strip()
+                if isinstance(raw_secondary_model, str) and raw_secondary_model.strip()
+                else None
+            )
+            settings_manager.set_setting("secondaryAsrModel", normalized_secondary_model, save=False)
+            log_text(
+                "CONFIG",
+                f"Secondary ASR model set to: {normalized_secondary_model if normalized_secondary_model else 'None'}",
+            )
+            worker = self._get_secondary_asr_worker()
+            if worker is not None and normalized_secondary_model:
+                model_to_warm = normalized_secondary_model
+
+                def _warm_secondary_model():
+                    try:
+                        worker.warm_model(
+                            model_to_warm,
+                            timeout_seconds=getattr(self, "_secondary_worker_timeout_seconds", 240.0),
+                        )
+                        log_text(
+                            "SECONDARY_ASR",
+                            f"Secondary worker warm-up ready for model: {model_to_warm}",
+                        )
+                    except Exception as warm_error:
+                        log_text(
+                            "SECONDARY_ASR",
+                            f"Secondary worker warm-up skipped: {warm_error}",
+                        )
+
+                threading.Thread(
+                    target=_warm_secondary_model,
+                    name="secondary-asr-warmup",
+                    daemon=True,
+                ).start()
+
+        if "selectedMicrophoneId" in received_config:
+            selected_mic = received_config.get("selectedMicrophoneId")
+            normalized_mic = "default" if selected_mic in (None, "", "default") else str(selected_mic)
+            settings_manager.set_setting("selectedMicrophoneId", normalized_mic, save=False)
+            self.audio_handler.set_input_device_preference(normalized_mic)
+            log_text("CONFIG", f"Selected microphone set to: {normalized_mic}")
+
+        for shortcut_key, default_value in (
+            ("transcribeShortcut", "Option+Space"),
+            ("stopTranscribingShortcut", "Cmd+Shift+S"),
+            ("retranscribeBackupShortcut", "Ctrl+Option+R"),
+        ):
+            if shortcut_key in received_config:
+                settings_manager.set_setting(
+                    shortcut_key,
+                    str(received_config.get(shortcut_key) or default_value),
+                    save=False,
+                )
+
+        self._apply_hotkey_settings_from_store(received_config)
+        settings_manager.save_settings()
+        self._handle_status_update("Configuration applied.", "grey")
+        self._update_app_state()
 
     def clear_active_session(self, *, as_not_found: bool = False) -> None:
         self._session_store.clear_active(as_not_found=as_not_found)
@@ -256,6 +419,137 @@ class Application:
             audio_state = None
         return self._session_store.get_session_result(session_id, audio_state=audio_state)
 
+    def _get_lifecycle(self) -> DictationLifecycleStateMachine:
+        lifecycle = getattr(self, "_lifecycle", None)
+        if lifecycle is None:
+            lifecycle = DictationLifecycleStateMachine(initial_state="idle")
+            self._lifecycle = lifecycle
+        return lifecycle
+
+    def _get_text_inserter(self) -> SafeTextInserter:
+        inserter = getattr(self, "_text_inserter", None)
+        if inserter is None:
+            inserter = SafeTextInserter(
+                paste_callback=send_text_to_citrix,
+                status_callback=self._handle_status_update,
+                log_callback=log_text,
+            )
+            self._text_inserter = inserter
+        return inserter
+
+    def _get_secondary_asr_worker(self) -> Optional[SecondaryAsrWorkerClient]:
+        if not getattr(self, "_secondary_worker_enabled", False):
+            return None
+
+        worker = getattr(self, "_secondary_asr_worker", None)
+        if worker is not None:
+            return worker
+
+        queue_limit_raw = os.getenv("CT_SECONDARY_ASR_QUEUE_LIMIT", "8").strip()
+        try:
+            queue_limit = max(1, int(queue_limit_raw))
+        except ValueError:
+            queue_limit = 8
+
+        worker = SecondaryAsrWorkerClient(
+            timeout_seconds=getattr(self, "_secondary_worker_timeout_seconds", 240.0),
+            queue_size=queue_limit,
+            log_callback=log_text,
+        )
+        self._secondary_asr_worker = worker
+        return worker
+
+    def _run_secondary_retranscribe(self, audio_path: str, model_id: str) -> str:
+        worker = self._get_secondary_asr_worker()
+        if worker is not None:
+            response = worker.transcribe_audio_file(
+                audio_path,
+                model_id,
+                timeout_seconds=getattr(self, "_secondary_worker_timeout_seconds", 240.0),
+            )
+            return str(response.get("transcript") or "")
+
+        # Test/dev fallback path when __init__ has been bypassed.
+        self.transcription_handler.ensure_model_assets(model_id)
+        return self.transcription_handler.retranscribe_audio_file(audio_path, model_id)
+
+    def _transition_lifecycle(
+        self,
+        next_state: str,
+        reason: str,
+        *,
+        force: bool = False,
+        publish: bool = False,
+    ) -> None:
+        lifecycle = self._get_lifecycle()
+        changed = False
+        try:
+            changed = lifecycle.transition(next_state, reason=reason, force=force)
+        except ValueError as error:
+            log_text("LIFECYCLE", f"Invalid transition ignored: {error}")
+        if publish and changed:
+            self._publish_lifecycle_state()
+
+    def _sync_lifecycle_from_state_payload(self, state_data: Dict[str, Any], *, reason: str) -> str:
+        lifecycle = self._get_lifecycle()
+        audio_state = state_data.get("audioState", "inactive")
+        program_active = bool(state_data.get("programActive", False))
+        wake_word_enabled = bool(state_data.get("wakeWordEnabled", True))
+        microphone_error = state_data.get("microphoneError")
+        return lifecycle.sync_from_audio_state(
+            audio_state=audio_state,
+            program_active=program_active,
+            wake_word_enabled=wake_word_enabled,
+            microphone_error=microphone_error if isinstance(microphone_error, str) else None,
+            reason=reason,
+        )
+
+    def _compose_state_payload(self, state_data: Dict[str, Any], *, source: str) -> Dict[str, Any]:
+        explicit_lifecycle = state_data.get("dictationLifecycle")
+        if ipc_contract.validate_lifecycle_state(explicit_lifecycle):
+            self._transition_lifecycle(
+                explicit_lifecycle,
+                f"{source}:explicit_lifecycle",
+                force=True,
+                publish=False,
+            )
+            lifecycle_state = explicit_lifecycle
+        else:
+            lifecycle_state = self._sync_lifecycle_from_state_payload(
+                state_data, reason=f"{source}:{state_data.get('audioState', 'unknown')}"
+            )
+        lifecycle_snapshot = self._get_lifecycle().snapshot()
+        merged = dict(state_data)
+        merged["dictationLifecycle"] = lifecycle_state
+        merged["dictationLifecycleReason"] = lifecycle_snapshot.reason
+        normalized_payload = ipc_contract.normalize_state_payload(merged, defaults=merged)
+        return normalized_payload or merged
+
+    def _emit_state_update(self, state_data: Dict[str, Any], *, source: str) -> None:
+        payload = self._compose_state_payload(state_data, source=source)
+        print(ipc_contract.with_prefix("state", payload), flush=True)
+
+    def _publish_lifecycle_state(self) -> None:
+        audio_state = "inactive"
+        audio_handler_active = False
+        wake_word_enabled = True
+        try:
+            audio_state = self.audio_handler.get_listening_state()
+            audio_handler_active = bool(self.audio_handler._program_active)
+            wake_word_enabled = bool(self.audio_handler.is_wake_word_enabled())
+        except Exception:
+            pass
+
+        state_data = {
+            "programActive": audio_handler_active,
+            "audioState": audio_state,
+            "isDictating": audio_state == "dictation",
+            "currentMode": getattr(self, "_current_processing_mode", None),
+            "wakeWordEnabled": wake_word_enabled,
+            "dictationLifecycle": self._get_lifecycle().state,
+        }
+        self._emit_state_update(state_data, source="lifecycle_publish")
+
     def start_backend(self):
         """Starts the application's background processes (Hotkeys only initially)."""
         self._handle_status_update(
@@ -265,14 +559,15 @@ class Application:
         # Send initial inactive state with grey color to ensure tray starts grey
         initial_state_data = {
             "programActive": False,
-            "audioState": "inactive", 
+            "audioState": "inactive",
             "isDictating": False,
             "isProofingActive": False,
             "canDictate": False,
             "currentMode": None,
             "wakeWordEnabled": settings_manager.get_setting("wakeWordEnabled", True),
         }
-        print(f"STATE:{json.dumps(initial_state_data)}", flush=True)
+        self._transition_lifecycle("idle", "startup_initial_state", force=True)
+        self._emit_state_update(initial_state_data, source="startup")
         
         self.hotkey_manager.start()
         self.start_backend_audio()
@@ -280,6 +575,34 @@ class Application:
         # Start Local API
         self.api_server = LocalAPIServer(self)
         self.api_server.start()
+
+        secondary_model = settings_manager.get_setting("secondaryAsrModel")
+        if secondary_model:
+            worker = self._get_secondary_asr_worker()
+            if worker is not None:
+                model_to_warm = str(secondary_model)
+
+                def _startup_warm_secondary():
+                    try:
+                        worker.warm_model(
+                            model_to_warm,
+                            timeout_seconds=getattr(self, "_secondary_worker_timeout_seconds", 240.0),
+                        )
+                        log_text(
+                            "SECONDARY_ASR",
+                            f"Secondary worker startup warm-up ready for model: {model_to_warm}",
+                        )
+                    except Exception as warm_error:
+                        log_text(
+                            "SECONDARY_ASR",
+                            f"Secondary startup warm-up skipped: {warm_error}",
+                        )
+
+                threading.Thread(
+                    target=_startup_warm_secondary,
+                    name="secondary-asr-startup",
+                    daemon=True,
+                ).start()
         
         # _update_app_state will be called once audio handler is ready
 
@@ -347,11 +670,20 @@ class Application:
             self.audio_handler.stop()
             if self.api_server:
                 self.api_server.stop()
+            if self.medication_autolearn_service:
+                self.medication_autolearn_service.shutdown()
+                set_global_medication_autolearn_service(None)
             # Ensure PyAudio is terminated if AudioHandler didn't do it
             if hasattr(self.audio_handler, "_p") and self.audio_handler._p:
                 self.audio_handler.terminate_pyaudio()
+            self._bg_retranscribe_cancel.set()
 
-            # Add any other cleanup needed for TranscriptionHandler if necessary
+            secondary_worker = getattr(self, "_secondary_asr_worker", None)
+            if secondary_worker is not None:
+                secondary_worker.shutdown()
+
+            if hasattr(self, "transcription_handler") and self.transcription_handler:
+                self.transcription_handler.shutdown()
 
         except Exception as e:
             log_text("SHUTDOWN_ERROR", f"Error during shutdown: {e}")
@@ -362,39 +694,110 @@ class Application:
 
     # --- Callback Methods for Handlers ---
 
+    def _is_dictation_or_processing_active(self) -> bool:
+        try:
+            audio_state = self.audio_handler.get_listening_state()
+        except Exception:
+            audio_state = ""
+        if audio_state in {"dictation", "processing"}:
+            return True
+        return bool(getattr(self, "_current_processing_mode", None))
+
+    def _handle_medication_autolearn_summary(self, summary: Dict[str, Any]) -> None:
+        message = (
+            "Medication auto-learn: "
+            f"scanned {int(summary.get('scannedRecords', 0) or 0)}, "
+            f"imported {int(summary.get('importedMappings', 0) or 0)}, "
+            f"queued {int(summary.get('queuedReviews', 0) or 0)}, "
+            f"pending {int(summary.get('pendingReviews', 0) or 0)}"
+        )
+        self._handle_status_update(message, "grey")
+        if summary.get("error"):
+            log_text("MEDICATION_AUTOLEARN_ERROR", str(summary.get("error")))
+
     def _handle_status_update(self, message: str, color: str):
         """Receives status updates from handlers and prints them for Electron."""
-        # Check if it's an amplitude message and print it directly if so
-        if message.startswith("AUDIO_AMP:"):
+        if ipc_contract.is_prefixed_message(message, "audioMetrics"):
+            payload_text = ipc_contract.strip_prefix(message, "audioMetrics")
+            try:
+                raw_payload = json.loads(payload_text or "{}")
+            except json.JSONDecodeError:
+                raw_payload = {}
+            metrics_payload = ipc_contract.normalize_audio_metrics_payload(raw_payload)
+            amp_value = metrics_payload.get("amplitude", 0) if metrics_payload else 0
+            self._session_store.set_audio_amp(int(amp_value))
+            if metrics_payload is not None:
+                print(ipc_contract.with_prefix("audioMetrics", metrics_payload), flush=True)
+            else:
+                print(message, flush=True)
+        # Legacy passthrough for older backend messages.
+        elif ipc_contract.is_prefixed_message(message, "audioAmplitudeLegacy"):
             try:
                 amp_value = int(message.split(":", 1)[1].strip())
             except (ValueError, IndexError):
                 amp_value = 0
             self._session_store.set_audio_amp(amp_value)
             print(message, flush=True)
-        elif color == "STATE_MSG":
-            # This is a detailed STATE JSON message, print it directly
+        elif ipc_contract.is_prefixed_message(message, "audioLevelsLegacy"):
             print(message, flush=True)
-            
-            # Extract microphone error information if present
-            if message.startswith("STATE:"):
+        elif color == "STATE_MSG":
+            if ipc_contract.is_prefixed_message(message, "state"):
                 try:
-                    state_data = json.loads(message[6:])  # Remove "STATE:" prefix
-                    if state_data.get("microphoneError"):
-                        # Log the detailed error for debugging
-                        log_text("MIC_ERROR_STATE", f"Microphone error: {state_data['microphoneError']}")
-                        
-                        # Send a user-friendly version to the status display
-                        error_msg = state_data["microphoneError"]
-                        if len(error_msg) > 80:  # Truncate very long messages
-                            error_msg = error_msg[:77] + "..."
-                        print(f"STATUS:orange:{error_msg}", flush=True)
-                        
-                except (json.JSONDecodeError, KeyError) as e:
-                    log_text("STATE_PARSE_ERROR", f"Error parsing state message: {e}")
+                    state_data = json.loads(ipc_contract.strip_prefix(message, "state") or "{}")
+                    if isinstance(state_data, dict):
+                        self._emit_state_update(state_data, source="audio_handler")
+                        if state_data.get("microphoneError"):
+                            log_text(
+                                "MIC_ERROR_STATE",
+                                f"Microphone error: {state_data['microphoneError']}",
+                            )
+                            error_msg = state_data["microphoneError"]
+                            if len(error_msg) > 80:
+                                error_msg = error_msg[:77] + "..."
+                            print(
+                                ipc_contract.with_prefix("status", f"orange:{error_msg}"),
+                                flush=True,
+                            )
+                        return
+                except (json.JSONDecodeError, KeyError, TypeError) as error:
+                    log_text("STATE_PARSE_ERROR", f"Error parsing state message: {error}")
+            print(message, flush=True)
         else:
             # Otherwise, print other status updates with the prefix
-            print(f"STATUS:{color}:{message}", flush=True)
+            print(ipc_contract.with_prefix("status", f"{color}:{message}"), flush=True)
+
+    def handle_vocabulary_api_command_line(self, command_line: str) -> None:
+        """Handle VOCABULARY_API command messages from Electron."""
+        try:
+            # Format: VOCABULARY_API:messageId:{"command": "...", "data": {...}}
+            parts = command_line.split(":", 2)
+            if len(parts) < 3:
+                log_text("VOCAB_ERROR", f"Invalid vocabulary API command format: {command_line}")
+                return
+
+            message_id = parts[1]
+            command_data = json.loads(parts[2])
+            result = self.vocabulary_api.handle_command(
+                command_data.get("command", ""),
+                **command_data.get("data", {})
+            )
+
+            response_message = f"VOCAB_RESPONSE:{message_id}:{json.dumps(result)}"
+            print(response_message, flush=True)
+            sys.stdout.flush()
+
+            log_text(
+                "VOCAB_API",
+                f"Handled vocabulary command: {command_data.get('command')} - Success: {result.get('success')}",
+            )
+        except json.JSONDecodeError as error:
+            log_text("VOCAB_ERROR", f"JSON decode error in vocabulary API: {error}")
+        except Exception as error:
+            log_text("VOCAB_ERROR", f"Error handling vocabulary API: {error}")
+            if 'message_id' in locals():
+                error_response = f"VOCAB_RESPONSE:{message_id}:{json.dumps({'success': False, 'error': str(error)})}"
+                print(error_response, flush=True)
+                sys.stdout.flush()
 
     # Removed _process_status_queue method
 
@@ -406,6 +809,7 @@ class Application:
             self._handle_status_update("Program inactive, wake word ignored.", "orange")
             # Ensure audio handler goes back to activation state if it changed
             self.audio_handler.set_listening_state("activation")
+            self._transition_lifecycle("idle", "wake_word_ignored_program_inactive", force=True)
             self._update_app_state()
             return
 
@@ -413,15 +817,18 @@ class Application:
             # Cancel any in-flight background retranscription
             self._bg_retranscribe_cancel.set()
             self._bg_retranscribe_result = None
+            self.medication_autolearn_service.notify_activity()
 
             self._current_processing_mode = "dictate"
             self._handle_status_update("Dictation started.", "green")
             self._current_dictation_started_at = time.time()
+            self._transition_lifecycle("recording", "wake_word_start_dictate", force=True)
         else:
             log_text("WAKE_WORD", f"Unknown command from wake word: {command}")
             self.audio_handler.set_listening_state(
                 "activation"
             )  # Go back if command invalid
+            self._transition_lifecycle("listening", "wake_word_unknown_command", force=True)
             self._update_app_state()
             return
 
@@ -443,7 +850,9 @@ class Application:
     def _handle_speech_end(self, audio_data):
         """Called by AudioHandler when speech ends after dictation starts."""
         log_text("SPEECH_END", f"Received {len(audio_data)} audio samples.")
+        self.medication_autolearn_service.notify_activity()
         self._handle_status_update("Speech ended. Transcribing...", "orange")
+        self._transition_lifecycle("transcribing", "speech_end", publish=True)
         self.mark_active_session_processing()
         self._update_app_state()  # Update state to processing
 
@@ -457,9 +866,11 @@ class Application:
 
     def _handle_transcription_complete(self, raw_text: str, duration: float):
         """Called by TranscriptionHandler when transcription is complete."""
-        log_text(
+        log_event(
             "TRANSCRIPTION_COMPLETE",
-            f"Duration: {duration:.2f}s, Raw text: {raw_text[:100]}....",
+            "transcription_received",
+            duration_seconds=round(duration, 2),
+            raw_transcript=raw_text,
         )
 
         # Process text if available
@@ -475,16 +886,23 @@ class Application:
                 log_text("LLM_ENHANCE", "Enhancing MedASR transcription with MedGemma...")
                 enhanced_text = llm_postprocessor.enhance_medical_transcription(processed_text)
                 if enhanced_text != processed_text:
-                    log_text("LLM_ENHANCE", f"Original: '{processed_text[:80]}...' -> Enhanced: '{enhanced_text[:80]}...'")
+                    log_event(
+                        "LLM_ENHANCE",
+                        "enhancement_changed_transcript",
+                        before_text=processed_text,
+                        after_text=enhanced_text,
+                    )
                     processed_text = enhanced_text
             
             processed_text = text_processor.clean_text(processed_text)
             
             # Log the processing if any changes were made
             if processed_text != raw_text.strip():
-                log_text(
+                log_event(
                     "TEXT_PROCESSED",
-                    f"Filler words removed. Original: '{raw_text.strip()}' -> Processed: '{processed_text}'",
+                    "post_processing_changed_text",
+                    original_text=raw_text.strip(),
+                    processed_text=processed_text,
                 )
         
         self._last_raw_transcription = processed_text  # Store processed text
@@ -516,29 +934,54 @@ class Application:
         # Send transcription to Electron BEFORE history entry so the frontend
         # finalizes the transcript (status → 'complete') before linking history.
         if processed_text:
-            print(f"FINAL_TRANSCRIPT:{processed_text}", flush=True)
+            print(ipc_contract.with_prefix("finalTranscript", processed_text), flush=True)
             if session_outcome.get("suppressPaste"):
                 log_text(
                     "TRANSCRIPTION_COMPLETE",
                     f"Session {session_outcome.get('sessionId')} suppressPaste enabled; skipped clipboard send.",
                 )
             else:
+                self._transition_lifecycle(
+                    "inserting",
+                    "transcription_ready_for_insert",
+                    force=True,
+                    publish=True,
+                )
                 self._handle_status_update("Sending to Citrix...", "blue")
-                send_text_to_citrix(processed_text + " ")  # Add space for easier continuation
-                log_text("TRANSCRIPTION_COMPLETE", "Text sent to Citrix via clipboard.")
+                insert_result = self._get_text_inserter().transactional_insert(
+                    primary_text=processed_text,
+                    source="transcription",
+                )
+                if insert_result.success:
+                    log_text("TRANSCRIPTION_COMPLETE", "Text sent to Citrix via clipboard.")
+                else:
+                    log_text(
+                        "TRANSCRIPTION_COMPLETE",
+                        "Insert skipped because no replacement text was available.",
+                    )
             self._handle_status_update("Transcription complete.", "green")
         else:
             # Empty transcription - always finish
-            self._handle_status_update("Transcription returned empty.", "orange")
+            self._get_text_inserter().transactional_insert(
+                primary_text="",
+                source="transcription",
+                append_trailing_space=False,
+                on_no_text_message="Transcription returned empty; existing text was left unchanged.",
+            )
 
         # Send history entry AFTER transcript so setLastHistoryEntry() finds the
         # correct (just-finalized) entry when linking.
-        print(f"HISTORY_ENTRY:{json.dumps(history_record, ensure_ascii=False)}", flush=True)
+        print(ipc_contract.with_prefix("historyEntry", history_record), flush=True)
+        try:
+            self.medication_autolearn_service.notify_dictation_completed()
+        except Exception as auto_learn_error:
+            log_text("MEDICATION_AUTOLEARN_ERROR", f"Failed to schedule auto-learn: {auto_learn_error}")
 
         # Reset state and return to listening
         self._current_processing_mode = None
         self.hotkey_manager.set_dictating_state(False)
         self.audio_handler.set_listening_state("activation")
+        self._transition_lifecycle("listening", "transcription_complete_reset", force=True)
         self._update_app_state()
 
         # Auto-trigger background retranscription with secondary model if configured
@@ -582,6 +1025,51 @@ class Application:
 
         return buffer.getvalue()
 
+    def _handle_start_dictate_hotkey(self, current_audio_state: str, trigger_command: str) -> bool:
+        """Start dictation via hotkey when state allows it."""
+        log_text("HOTKEY", f"Checking audio state for command: {trigger_command}")
+        if current_audio_state == "dictation":
+            self._handle_status_update(
+                "Already dictating, ignoring start command.", "orange"
+            )
+            log_text("HOTKEY", "Already dictating, command ignored.")
+            return False
+        if current_audio_state == "processing":
+            self._handle_status_update(
+                "Currently processing, ignoring start command.", "orange"
+            )
+            log_text("HOTKEY", "Currently processing, command ignored.")
+            return False
+
+        log_text(
+            "HOTKEY",
+            f"Audio state is '{current_audio_state}', triggering action for command: {trigger_command}",
+        )
+        self._handle_wake_word(config.COMMAND_START_DICTATE)
+        log_text("HOTKEY", f"Called _handle_wake_word with command: {trigger_command}")
+        return True
+
+    def _handle_toggle_dictate_hotkey(self, current_audio_state: str):
+        """Toggle dictation start/stop from a single hotkey."""
+        if current_audio_state == "dictation":
+            self._trigger_stop_dictation()
+            return
+        if current_audio_state == "processing":
+            self._handle_status_update(
+                "Currently processing, toggle ignored.", "orange"
+            )
+            return
+        self._handle_start_dictate_hotkey(current_audio_state, config.COMMAND_TOGGLE_DICTATE)
+
+    def _handle_stop_dictate_hotkey(self, current_audio_state: str):
+        """Stop dictation hotkey handler."""
+        if current_audio_state == "dictation":
+            self._trigger_stop_dictation()
+        else:
+            self._handle_status_update(
+                "Not dictating, stop command ignored.", "orange"
+            )
+
     def _handle_hotkey(self, command: str):
         """Called by HotkeyManager when a hotkey is pressed."""
         log_text("HOTKEY", f"Command received: {command}")
@@ -610,8 +1098,13 @@ class Application:
                 self._handle_retranscribe_secondary()
             except Exception as e:
                 log_text("RETRANSCRIBE_ERROR", f"Unexpected error in retranscribe handler: {e}")
-                print(f"RETRANSCRIBE_START:error:Re-transcribe failed: {e}", flush=True)
-                print("RETRANSCRIBE_END:error", flush=True)
+                print(
+                    ipc_contract.with_prefix(
+                        "retranscribeStart", f"error:Re-transcribe failed: {e}"
+                    ),
+                    flush=True,
+                )
+                print(ipc_contract.with_prefix("retranscribeEnd", "error"), flush=True)
                 self._handle_status_update(f"Re-transcribe error: {e}", "red")
             return
 
@@ -624,35 +1117,15 @@ class Application:
 
         # Check current audio state before starting new dictation
         current_audio_state = self.audio_handler.get_listening_state()
+
         if command == config.COMMAND_START_DICTATE:
-            log_text("HOTKEY", f"Checking audio state for command: {command}")
-            if current_audio_state == "dictation":
-                self._handle_status_update(
-                    "Already dictating, ignoring start command.", "orange"
-                )
-                log_text("HOTKEY", "Already dictating, command ignored.")
-                return
-            if current_audio_state == "processing":
-                self._handle_status_update(
-                    "Currently processing, ignoring start command.", "orange"
-                )
-                log_text("HOTKEY", "Currently processing, command ignored.")
-                return
-            # If in activation, proceed to call _handle_wake_word equivalent
-            log_text(
-                "HOTKEY",
-                f"Audio state is '{current_audio_state}', triggering action for command: {command}",
-            )
-            self._handle_wake_word(command)  # Simulate wake word detection
-            log_text("HOTKEY", f"Called _handle_wake_word with command: {command}")
+            self._handle_start_dictate_hotkey(current_audio_state, command)
+
+        elif command == config.COMMAND_TOGGLE_DICTATE:
+            self._handle_toggle_dictate_hotkey(current_audio_state)
 
         elif command == config.COMMAND_STOP_DICTATE:
-            if current_audio_state == "dictation":
-                self._trigger_stop_dictation()
-            else:
-                self._handle_status_update(
-                    "Not dictating, stop command ignored.", "orange"
-                )
+            self._handle_stop_dictate_hotkey(current_audio_state)
 
         # Add handling for ABORT hotkey if defined in config
         elif (
@@ -674,11 +1147,31 @@ class Application:
         If a background retranscription has already completed, use the cached result
         immediately instead of re-running the model.
         """
+        fallback_text = (self._last_raw_transcription or "").strip()
         secondary_model = settings_manager.get_setting("secondaryAsrModel")
         if not secondary_model:
-            print("RETRANSCRIBE_START:error:No secondary ASR model configured. Set one in Settings.", flush=True)
-            print("RETRANSCRIBE_END:error", flush=True)
-            self._handle_status_update("No secondary ASR model configured. Set one in Settings.", "orange")
+            print(
+                ipc_contract.with_prefix(
+                    "retranscribeStart",
+                    "error:No secondary ASR model configured. Set one in Settings.",
+                ),
+                flush=True,
+            )
+            print(ipc_contract.with_prefix("retranscribeEnd", "error"), flush=True)
+            if fallback_text:
+                self._get_text_inserter().transactional_insert(
+                    primary_text="",
+                    fallback_text=fallback_text,
+                    source="re-transcription",
+                    on_no_text_message="No secondary ASR model configured and no fallback text was available.",
+                )
+            else:
+                self._handle_status_update(
+                    "No secondary ASR model configured. Set one in Settings.", "orange"
+                )
+            self._transition_lifecycle(
+                "listening", "retranscribe_no_secondary_model", force=True, publish=True
+            )
             return
 
         # Check if background retranscription already has a cached result
@@ -698,38 +1191,105 @@ class Application:
             else:
                 log_text("RETRANSCRIBE", "Using cached background retranscribe result")
                 result_text = cached["transcript"]
-                print(f"RETRANSCRIBE_START:{cached.get('modelId', secondary_model)}", flush=True)
-                print("RETRANSCRIBE_END:success", flush=True)
+                print(
+                    ipc_contract.with_prefix(
+                        "retranscribeStart", cached.get("modelId", secondary_model)
+                    ),
+                    flush=True,
+                )
+                print(ipc_contract.with_prefix("retranscribeEnd", "success"), flush=True)
                 # Re-emit as a manual result so frontend updates the linked transcript entry.
                 manual_payload = dict(cached)
                 manual_payload["autoTriggered"] = False
-                print(f"RETRANSCRIBE_QUICK_RESULT:{json.dumps(manual_payload, ensure_ascii=False)}", flush=True)
-                send_text_to_citrix(result_text + " ")
+                print(
+                    ipc_contract.with_prefix("retranscribeQuickResult", manual_payload),
+                    flush=True,
+                )
+                self._transition_lifecycle(
+                    "inserting", "cached_retranscribe_insert", force=True, publish=True
+                )
+                self._get_text_inserter().transactional_insert(
+                    primary_text=result_text,
+                    fallback_text=fallback_text or None,
+                    source="re-transcription",
+                )
                 self._handle_status_update("Re-transcription complete (cached).", "green")
+                self._transition_lifecycle(
+                    "listening", "cached_retranscribe_complete", force=True, publish=True
+                )
                 self._bg_retranscribe_result = None
                 return
 
         entry_id = self._last_history_entry_id
         if not entry_id:
-            print("RETRANSCRIBE_START:error:No recent dictation to re-transcribe.", flush=True)
-            print("RETRANSCRIBE_END:error", flush=True)
-            self._handle_status_update("No recent dictation to re-transcribe.", "orange")
+            print(
+                ipc_contract.with_prefix(
+                    "retranscribeStart", "error:No recent dictation to re-transcribe."
+                ),
+                flush=True,
+            )
+            print(ipc_contract.with_prefix("retranscribeEnd", "error"), flush=True)
+            if fallback_text:
+                self._get_text_inserter().transactional_insert(
+                    primary_text="",
+                    fallback_text=fallback_text,
+                    source="re-transcription",
+                    on_no_text_message="No recent dictation was available and no fallback text existed.",
+                )
+            else:
+                self._handle_status_update("No recent dictation to re-transcribe.", "orange")
+            self._transition_lifecycle(
+                "listening", "retranscribe_no_entry", force=True, publish=True
+            )
             return
 
         audio_path = os.path.join("data", "history", "audio", f"{entry_id}.wav")
         if not os.path.exists(audio_path):
-            print("RETRANSCRIBE_START:error:Audio file not found for last dictation.", flush=True)
-            print("RETRANSCRIBE_END:error", flush=True)
-            self._handle_status_update("Audio file not found for last dictation.", "orange")
+            print(
+                ipc_contract.with_prefix(
+                    "retranscribeStart",
+                    "error:Audio file not found for last dictation.",
+                ),
+                flush=True,
+            )
+            print(ipc_contract.with_prefix("retranscribeEnd", "error"), flush=True)
+            if fallback_text:
+                self._get_text_inserter().transactional_insert(
+                    primary_text="",
+                    fallback_text=fallback_text,
+                    source="re-transcription",
+                    on_no_text_message="Audio for re-transcription is unavailable and no fallback text existed.",
+                )
+            else:
+                self._handle_status_update("Audio file not found for last dictation.", "orange")
+            self._transition_lifecycle(
+                "listening", "retranscribe_audio_missing", force=True, publish=True
+            )
             return
 
-        print(f"RETRANSCRIBE_START:{secondary_model}", flush=True)
-        self._handle_status_update(f"Re-transcribing with {secondary_model}...", "blue")
+        print(
+            ipc_contract.with_prefix(
+                "retranscribeStart",
+                f"{secondary_model} (preparing model assets if needed)",
+            ),
+            flush=True,
+        )
+        pending_message = (
+            f"Preparing {secondary_model} for re-transcription (first run may take longer)..."
+        )
+        self._get_text_inserter().notify_pending(pending_message)
+        self._transition_lifecycle(
+            "transcribing", "retranscribe_requested", force=True, publish=True
+        )
 
         def retranscribe_worker():
             try:
+                self._handle_status_update(f"Re-transcribing with {secondary_model}...", "blue")
+                self._transition_lifecycle(
+                    "transcribing", "retranscribe_model_ready", force=True, publish=True
+                )
                 start_time = time.time()
-                result_text = self.transcription_handler.retranscribe_audio_file(audio_path, secondary_model)
+                result_text = self._run_secondary_retranscribe(audio_path, secondary_model)
 
                 if result_text:
                     use_llm = settings_manager.get_setting("useMedGemmaPostProcessing", False)
@@ -739,21 +1299,58 @@ class Application:
 
                 duration = time.time() - start_time
 
-                result_payload = {
-                    "success": True,
-                    "entryId": entry_id,
-                    "modelId": secondary_model,
-                    "transcript": result_text or "",
-                    "duration": round(duration, 2)
-                }
-                print("RETRANSCRIBE_END:success", flush=True)
-                print(f"RETRANSCRIBE_QUICK_RESULT:{json.dumps(result_payload, ensure_ascii=False)}", flush=True)
-
                 if result_text:
-                    send_text_to_citrix(result_text + " ")
-                    self._handle_status_update("Re-transcription complete.", "green")
+                    result_payload = {
+                        "success": True,
+                        "entryId": entry_id,
+                        "modelId": secondary_model,
+                        "transcript": result_text,
+                        "duration": round(duration, 2),
+                    }
+                    print(ipc_contract.with_prefix("retranscribeEnd", "success"), flush=True)
+                    print(
+                        ipc_contract.with_prefix("retranscribeQuickResult", result_payload),
+                        flush=True,
+                    )
+                    self._transition_lifecycle(
+                        "inserting", "retranscribe_insert_ready", force=True, publish=True
+                    )
+                    insert_result = self._get_text_inserter().transactional_insert(
+                        primary_text=result_text,
+                        fallback_text=fallback_text or None,
+                        source="re-transcription",
+                    )
+                    if insert_result.success:
+                        self._handle_status_update("Re-transcription complete.", "green")
+                    else:
+                        self._handle_status_update(
+                            "Re-transcription finished but no replacement text was available.",
+                            "orange",
+                        )
+                    self._transition_lifecycle(
+                        "listening", "retranscribe_complete", force=True, publish=True
+                    )
                 else:
-                    self._handle_status_update("Re-transcription returned empty.", "orange")
+                    error_payload = {
+                        "success": False,
+                        "entryId": entry_id,
+                        "modelId": secondary_model,
+                        "error": "Re-transcription returned empty text.",
+                    }
+                    print(ipc_contract.with_prefix("retranscribeEnd", "error"), flush=True)
+                    print(
+                        ipc_contract.with_prefix("retranscribeQuickResult", error_payload),
+                        flush=True,
+                    )
+                    self._get_text_inserter().transactional_insert(
+                        primary_text="",
+                        fallback_text=fallback_text or None,
+                        source="re-transcription",
+                        on_no_text_message="Re-transcription returned empty; existing text was left unchanged.",
+                    )
+                    self._transition_lifecycle(
+                        "listening", "retranscribe_empty", force=True, publish=True
+                    )
 
             except Exception as e:
                 log_text("RETRANSCRIBE_ERROR", f"Quick retranscribe failed: {e}")
@@ -763,9 +1360,20 @@ class Application:
                     "modelId": secondary_model,
                     "error": str(e)
                 }
-                print("RETRANSCRIBE_END:error", flush=True)
-                print(f"RETRANSCRIBE_QUICK_RESULT:{json.dumps(error_payload)}", flush=True)
-                self._handle_status_update(f"Re-transcription failed: {e}", "red")
+                print(ipc_contract.with_prefix("retranscribeEnd", "error"), flush=True)
+                print(
+                    ipc_contract.with_prefix("retranscribeQuickResult", error_payload),
+                    flush=True,
+                )
+                self._get_text_inserter().transactional_insert(
+                    primary_text="",
+                    fallback_text=fallback_text or None,
+                    source="re-transcription",
+                    on_no_text_message=f"Re-transcription failed: {e}. Existing text was left unchanged.",
+                )
+                self._transition_lifecycle(
+                    "error", "retranscribe_exception", force=True, publish=True
+                )
 
         threading.Thread(target=retranscribe_worker, daemon=True).start()
 
@@ -791,7 +1399,7 @@ class Application:
 
                 log_text("BG_RETRANSCRIBE", f"Starting background retranscribe with {secondary_model}")
                 start_time = time.time()
-                result_text = self.transcription_handler.retranscribe_audio_file(audio_path, secondary_model)
+                result_text = self._run_secondary_retranscribe(audio_path, secondary_model)
 
                 if cancel_event.is_set():
                     log_text("BG_RETRANSCRIBE", "Cancelled after transcription completed")
@@ -808,20 +1416,37 @@ class Application:
                 if cancel_event.is_set():
                     return
 
-                result_payload = {
-                    "success": True,
-                    "entryId": entry_id,
-                    "modelId": secondary_model,
-                    "transcript": result_text or "",
-                    "duration": round(duration, 2),
-                    "autoTriggered": True
-                }
+                if result_text:
+                    result_payload = {
+                        "success": True,
+                        "entryId": entry_id,
+                        "modelId": secondary_model,
+                        "transcript": result_text,
+                        "duration": round(duration, 2),
+                        "autoTriggered": True
+                    }
 
-                # Cache the result so Cmd+Shift+X can use it immediately
-                self._bg_retranscribe_result = result_payload
+                    # Cache the result so quick-retranscribe hotkey can use it immediately
+                    self._bg_retranscribe_result = result_payload
 
-                print(f"RETRANSCRIBE_QUICK_RESULT:{json.dumps(result_payload, ensure_ascii=False)}", flush=True)
-                log_text("BG_RETRANSCRIBE", f"Background retranscribe complete in {duration:.2f}s")
+                    print(
+                        ipc_contract.with_prefix("retranscribeQuickResult", result_payload),
+                        flush=True,
+                    )
+                    log_text("BG_RETRANSCRIBE", f"Background retranscribe complete in {duration:.2f}s")
+                else:
+                    error_payload = {
+                        "success": False,
+                        "entryId": entry_id,
+                        "modelId": secondary_model,
+                        "error": "Background re-transcription returned empty text.",
+                        "autoTriggered": True,
+                    }
+                    print(
+                        ipc_contract.with_prefix("retranscribeQuickResult", error_payload),
+                        flush=True,
+                    )
+                    log_text("BG_RETRANSCRIBE", "Background retranscribe returned empty text")
 
             except Exception as e:
                 if cancel_event.is_set():
@@ -834,13 +1459,288 @@ class Application:
                     "error": str(e),
                     "autoTriggered": True
                 }
-                print(f"RETRANSCRIBE_QUICK_RESULT:{json.dumps(error_payload)}", flush=True)
+                print(
+                    ipc_contract.with_prefix("retranscribeQuickResult", error_payload),
+                    flush=True,
+                )
 
         thread = threading.Thread(target=bg_worker, daemon=True)
         self._bg_retranscribe_thread = thread
         thread.start()
 
     # --- Command Handling Methods (Triggered by stdin) ---
+
+    def _initialize_stdin_dispatch(self) -> None:
+        self._stdin_exact_handlers = {
+            "STOP_DICTATION": self._handle_stop_dictation_command,
+            "ABORT_DICTATION": self._handle_abort_dictation_command,
+            "GET_HOTKEYS": self._handle_get_hotkeys_command,
+            "TOGGLE_ACTIVE": self._handle_toggle_active_command,
+            "RESTART_APP": self._handle_restart_command,
+            "start_dictate": self._handle_start_dictate_command,
+            "MODELS_REQUEST": self._handle_models_request_command,
+            "SHUTDOWN": self._handle_shutdown_command,
+        }
+        self._stdin_prefix_handlers = (
+            ("CONFIG:", self._handle_config_command),
+            ("SET_APP_STATE:", self._handle_set_app_state_command),
+            ("SET_HOTKEYS_SUSPENDED:", self._handle_set_hotkeys_suspended_command),
+            ("VOCABULARY_API:", self._handle_vocabulary_api_command),
+            ("ENSURE_MODEL:", self._handle_ensure_model_command),
+            ("LIST_MICROPHONES:", self._handle_list_microphones_command),
+            ("REPASTE:", self._handle_repaste_command),
+            ("RETRANSCRIBE_AUDIO:", self._handle_retranscribe_audio_command),
+        )
+
+    def process_stdin_command(self, command_line: str) -> bool:
+        """Dispatch a single stdin command. Returns False when shutdown is requested."""
+        exact_handler = self._stdin_exact_handlers.get(command_line)
+        if exact_handler is not None:
+            return bool(exact_handler(command_line))
+
+        for prefix, handler in self._stdin_prefix_handlers:
+            if command_line.startswith(prefix):
+                return bool(handler(command_line))
+
+        log_text("COMMAND_UNKNOWN", f"Unknown command received: {command_line}")
+        print(f"UNKNOWN_COMMAND:{command_line}", flush=True)
+        sys.stdout.flush()
+        return True
+
+    def _handle_config_command(self, command_line: str) -> bool:
+        log_text("STARTUP_TRACE", "Received CONFIG: command.")
+        config_str = command_line[len("CONFIG:") :]
+        try:
+            received_config = json.loads(config_str)
+            log_text("CONFIG", "Configuration received from Electron.")
+            log_text("STARTUP_TRACE", f"Successfully parsed config JSON: {received_config}")
+            self.apply_runtime_config(received_config)
+        except json.JSONDecodeError as error:
+            log_text("CONFIG_ERROR", f"JSON decode error on config: {error}")
+            self._handle_status_update(f"Config JSON error: {error}", "red")
+        return True
+
+    def _handle_stop_dictation_command(self, _command_line: str) -> bool:
+        self._trigger_stop_dictation()
+        return True
+
+    def _handle_abort_dictation_command(self, _command_line: str) -> bool:
+        self._trigger_abort_dictation()
+        return True
+
+    def _handle_get_hotkeys_command(self, _command_line: str) -> bool:
+        self._send_hotkeys_info()
+        return True
+
+    def _handle_toggle_active_command(self, _command_line: str) -> bool:
+        self._toggle_program_active()
+        return True
+
+    def _handle_restart_command(self, _command_line: str) -> bool:
+        self._trigger_restart()
+        return True
+
+    def _handle_set_app_state_command(self, command_line: str) -> bool:
+        try:
+            active_status = command_line[len("SET_APP_STATE:") :]
+            active = active_status.lower() == "true"
+            self.audio_handler.set_program_active(active)
+            self._program_active = active
+            log_text("COMMAND", f"Set program active state via command: {active}")
+            self._update_app_state()
+        except ValueError:
+            log_text("COMMAND_ERROR", f"Invalid active state command format: {command_line}")
+            self._handle_status_update("Invalid state command.", "red")
+        return True
+
+    def _handle_set_hotkeys_suspended_command(self, command_line: str) -> bool:
+        try:
+            suspended_status = command_line[len("SET_HOTKEYS_SUSPENDED:") :].strip().lower()
+            suspended = suspended_status == "true"
+            self.hotkey_manager.set_hotkeys_suspended(suspended)
+            log_text("COMMAND", f"Hotkeys suspended: {suspended}")
+        except Exception as hotkey_suspend_error:
+            log_text(
+                "COMMAND_ERROR",
+                f"Failed to set hotkey suspension state: {hotkey_suspend_error}",
+            )
+        return True
+
+    def _handle_vocabulary_api_command(self, command_line: str) -> bool:
+        self.handle_vocabulary_api_command_line(command_line)
+        return True
+
+    def _handle_ensure_model_command(self, command_line: str) -> bool:
+        parts = command_line.split(":", 2)
+        if len(parts) < 3:
+            log_text("COMMAND_ERROR", f"Invalid ENSURE_MODEL command: {command_line}")
+            return True
+
+        request_id = parts[1]
+        repo_id = parts[2]
+        if repo_id.lower().startswith("apple:"):
+            helper_candidates = [
+                os.path.abspath(config.resolve_resource_path("AppleSpeechHelper.app")),
+                os.path.abspath(
+                    os.path.join(
+                        os.path.dirname(__file__),
+                        "tools",
+                        "apple_speech_helper",
+                        "dist",
+                        "AppleSpeechHelper.app",
+                    )
+                ),
+            ]
+            helper_path = next(
+                (
+                    candidate
+                    for candidate in helper_candidates
+                    if os.path.isdir(candidate) and candidate.lower().endswith(".app")
+                ),
+                None,
+            )
+            if not helper_path:
+                error_payload = {
+                    "success": False,
+                    "modelId": repo_id,
+                    "error": "AppleSpeechHelper.app not found. Build it with: bash tools/apple_speech_helper/build.sh",
+                }
+                print(f"MODEL_ERROR:{request_id}:{json.dumps(error_payload)}", flush=True)
+                sys.stdout.flush()
+                log_text("COMMAND_ERROR", f"Apple model selected but helper missing: {repo_id}")
+                return True
+
+            response = {
+                "success": True,
+                "modelId": repo_id,
+                "localPath": helper_path,
+                "message": "Apple Speech selected (helper found; no model download required).",
+            }
+            print(f"MODEL_READY:{request_id}:{json.dumps(response)}", flush=True)
+            sys.stdout.flush()
+            log_text("COMMAND", f"No-op ensure for Apple model: {repo_id}")
+            return True
+
+        try:
+            local_path = self.transcription_handler.ensure_model_assets(repo_id)
+            response = {
+                "success": True,
+                "modelId": repo_id,
+                "localPath": local_path,
+                "message": "Model assets ready.",
+            }
+            print(f"MODEL_READY:{request_id}:{json.dumps(response)}", flush=True)
+            sys.stdout.flush()
+            log_text("COMMAND", f"Model assets ensured for {repo_id}")
+        except Exception as ensure_error:
+            error_payload = {
+                "success": False,
+                "modelId": repo_id,
+                "error": str(ensure_error),
+            }
+            print(f"MODEL_ERROR:{request_id}:{json.dumps(error_payload)}", flush=True)
+            sys.stdout.flush()
+            log_text("COMMAND_ERROR", f"Failed to ensure model {repo_id}: {ensure_error}")
+        return True
+
+    def _handle_list_microphones_command(self, command_line: str) -> bool:
+        parts = command_line.split(":", 1)
+        request_id = parts[1] if len(parts) > 1 else ""
+        try:
+            devices = self.audio_handler.list_input_devices()
+            response = {"success": True, "devices": devices}
+        except Exception as microphone_error:
+            response = {"success": False, "error": str(microphone_error), "devices": []}
+
+        print(
+            f"MICROPHONES_LIST:{request_id}:{json.dumps(response, ensure_ascii=False)}",
+            flush=True,
+        )
+        sys.stdout.flush()
+        return True
+
+    def _handle_repaste_command(self, command_line: str) -> bool:
+        repaste_text = command_line[len("REPASTE:") :]
+        if repaste_text:
+            log_text("REPASTE", f"Re-pasting text: {repaste_text[:50]}...")
+            self._get_text_inserter().transactional_insert(
+                primary_text=repaste_text,
+                source="repaste",
+            )
+        else:
+            log_text("REPASTE", "Empty repaste text, ignoring.")
+        return True
+
+    def _handle_start_dictate_command(self, _command_line: str) -> bool:
+        self._handle_hotkey(config.COMMAND_START_DICTATE)
+        return True
+
+    def _handle_models_request_command(self, _command_line: str) -> bool:
+        models_payload = json.dumps(config.AVAILABLE_ASR_MODELS)
+        print(f"MODELS_LIST:{models_payload}", flush=True)
+        sys.stdout.flush()
+        log_text("COMMAND", "Sent MODELS_LIST to Electron")
+        return True
+
+    def _handle_retranscribe_audio_command(self, command_line: str) -> bool:
+        request_id = ""
+        try:
+            parts = command_line.split(":", 3)
+            if len(parts) < 4:
+                log_text("RETRANSCRIBE_ERROR", f"Invalid RETRANSCRIBE_AUDIO format: {command_line}")
+                return True
+
+            request_id = parts[1]
+            entry_id = parts[2]
+            model_id = parts[3]
+
+            log_text("RETRANSCRIBE", f"Starting retranscription: entry={entry_id}, model={model_id}")
+
+            audio_path = os.path.join("data", "history", "audio", f"{entry_id}.wav")
+            if not os.path.exists(audio_path):
+                error_payload = {
+                    "success": False,
+                    "error": f"Audio file not found: {audio_path}",
+                }
+                print(f"RETRANSCRIBE_RESULT:{request_id}:{json.dumps(error_payload)}", flush=True)
+                sys.stdout.flush()
+                return True
+
+            start_time = time.time()
+            result_text = self._run_secondary_retranscribe(audio_path, model_id)
+
+            if result_text:
+                use_llm_enhancement = settings_manager.get_setting("useMedGemmaPostProcessing", False)
+                if use_llm_enhancement and model_id == "google/medasr":
+                    log_text("LLM_ENHANCE", "Enhancing retranscription with MedGemma...")
+                    result_text = llm_postprocessor.enhance_medical_transcription(result_text)
+                result_text = text_processor.clean_text(result_text)
+
+            duration = time.time() - start_time
+            response = {
+                "success": True,
+                "entryId": entry_id,
+                "modelId": model_id,
+                "transcript": result_text,
+                "duration": round(duration, 2),
+            }
+            print(f"RETRANSCRIBE_RESULT:{request_id}:{json.dumps(response)}", flush=True)
+            sys.stdout.flush()
+            log_text("RETRANSCRIBE", f"Completed retranscription in {duration:.2f}s")
+        except Exception as retranscribe_error:
+            log_text("RETRANSCRIBE_ERROR", f"Retranscription failed: {retranscribe_error}")
+            error_payload = {
+                "success": False,
+                "error": str(retranscribe_error),
+            }
+            if request_id:
+                print(f"RETRANSCRIBE_RESULT:{request_id}:{json.dumps(error_payload)}", flush=True)
+                sys.stdout.flush()
+        return True
+
+    def _handle_shutdown_command(self, _command_line: str) -> bool:
+        log_text("COMMAND", "Shutdown command received from Electron.")
+        return False
 
     def _trigger_stop_dictation(self):
         """Handles stop dictation command (process audio) from Electron or hotkey."""
@@ -856,6 +1756,9 @@ class Application:
         if current_audio_state == "dictation":
             self._handle_status_update(
                 "Stopping dictation manually & processing...", "orange"
+            )
+            self._transition_lifecycle(
+                "stopping", "manual_stop_requested", force=True, publish=True
             )
             self.mark_active_session_processing()
             self.audio_handler.force_process_audio()
@@ -885,6 +1788,7 @@ class Application:
         self._pending_audio_bytes = None
         self._current_dictation_started_at = None
         self.clear_active_session(as_not_found=True)
+        self._transition_lifecycle("listening", "dictation_aborted", force=True)
         self._update_app_state()  # Update state after aborting
 
     def _trigger_restart(self):
@@ -907,7 +1811,7 @@ class Application:
         log_text("COMMAND", "Get Hotkeys requested.")
         # Send hotkeys as a structured message (e.g., JSON)
         hotkey_data = {}
-        for combo, command in config.HOTKEY_COMBINATIONS.items():
+        for combo, command in self.hotkey_manager.get_hotkey_combinations().items():
             keys_str_list = []
             for key in combo:
                 if isinstance(key, keyboard.KeyCode):
@@ -936,7 +1840,7 @@ class Application:
             combo_str = "+".join(keys_str_list)
             hotkey_data[combo_str] = command
 
-        print(f"HOTKEYS:{json.dumps(hotkey_data)}", flush=True)
+        print(ipc_contract.with_prefix("hotkeys", hotkey_data), flush=True)
 
     # Mini mode toggle is handled entirely by Electron, no backend action needed
 
@@ -952,6 +1856,9 @@ class Application:
             self.hotkey_manager.set_dictating_state(
                 False
             )  # <<< SET STATE TO FALSE if program deactivated
+            self._transition_lifecycle("idle", "program_deactivated", force=True)
+        else:
+            self._transition_lifecycle("listening", "program_activated", force=True)
         # Send state update to Electron
         self._update_app_state()
 
@@ -987,7 +1894,7 @@ class Application:
             "currentMode": self._current_processing_mode,  # 'dictate' or None
             "wakeWordEnabled": wake_word_enabled,
         }
-        print(f"STATE:{json.dumps(state_data)}", flush=True)
+        self._emit_state_update(state_data, source="application")
 
         # Also send a user-friendly status message based on state
         if not audio_handler_active:
@@ -1034,312 +1941,14 @@ if __name__ == "__main__":
         log_text("CONFIG", "Sending GET_CONFIG request to Electron...")
         print("GET_CONFIG", flush=True)
         sys.stdout.flush()  # Explicit flush
-        config_loaded = False
-        received_config = None
 
         # Main loop to read commands from stdin
         for line in sys.stdin:
             command_line = line.strip()
             log_text("STDIN", f"Received command: {command_line}")
-            # --- CONFIGURATION HANDLING ---
-            if command_line.startswith("CONFIG:"):  # Changed command check
-                log_text("STARTUP_TRACE", "Received CONFIG: command.")  # Updated TRACE
-                config_str = command_line[
-                    len("CONFIG:") :
-                ]  # Extract JSON from the same line
-                try:
-                    received_config = json.loads(config_str)
-                    # Removed call to non-existent config.load_settings_from_json
-                    config_loaded = True
-                    log_text("CONFIG", "Configuration received from Electron.")
-                    log_text(
-                        "STARTUP_TRACE",
-                        f"Successfully parsed config JSON: {received_config}",
-                    )  # ADDED TRACE
-
-                    # --- Directly update handlers from received_config ---
-                    if "wakeWords" in received_config:
-                        app.audio_handler.update_wake_words(
-                            received_config["wakeWords"]
-                        )
-                        # Save wake words to persistent settings
-                        settings_manager.set_setting("wakeWords", received_config["wakeWords"], save=False)
-                    else:
-                        log_text(
-                            "CONFIG_WARN", "Wake words not found in received config."
-                        )
-
-                    if "selectedAsrModel" in received_config:
-                        try:
-                            app.transcription_handler.update_selected_asr_model(
-                                received_config["selectedAsrModel"]
-                            )
-                            settings_manager.set_setting(
-                                "selectedAsrModel",
-                                received_config["selectedAsrModel"],
-                                save=False,
-                            )
-                            log_text(
-                                "CONFIG",
-                                f"ASR model set to: {received_config['selectedAsrModel']}",
-                            )
-                        except Exception as e:
-                            log_text("CONFIG_ERROR", f"Failed to update ASR model: {e}")
-                    else:
-                        log_text(
-                            "CONFIG_WARN",
-                            "selectedAsrModel not found in received config.",
-                        )
-
-                    if "fillerWords" in received_config:
-                        text_processor.set_filler_words(received_config["fillerWords"])
-                        log_text("CONFIG", f"Filler words updated: {received_config['fillerWords']}")
-
-                    if "autoStopOnSilence" in received_config:
-                        auto_stop = bool(received_config["autoStopOnSilence"])
-                        settings_manager.set_setting("autoStopOnSilence", auto_stop, save=False)
-                        app.audio_handler.set_auto_silence_stop_enabled(auto_stop)
-                        log_text("CONFIG", f"Auto-stop on silence set to {auto_stop}")
-
-                    if "wakeWordEnabled" in received_config:
-                        wake_word_enabled = bool(received_config["wakeWordEnabled"])
-                        settings_manager.set_setting("wakeWordEnabled", wake_word_enabled, save=False)
-                        app.audio_handler.set_wake_word_enabled(wake_word_enabled)
-                        log_text("CONFIG", f"Wake word listening enabled: {wake_word_enabled}")
-
-                    if "secondaryAsrModel" in received_config:
-                        settings_manager.set_setting("secondaryAsrModel", received_config["secondaryAsrModel"], save=False)
-                        log_text("CONFIG", f"Secondary ASR model set to: {received_config['secondaryAsrModel']}")
-
-                    # Save all settings to file
-                    settings_manager.save_settings()
-                    # --- End direct updates ---
-
-                    app._handle_status_update(
-                        "Configuration applied.", "grey"
-                    )  # Changed status message
-                    app._update_app_state()  # Reflect state change to Electron
-
-                except json.JSONDecodeError as e:
-                    log_text("CONFIG_ERROR", f"JSON decode error on config: {e}")
-                    app._handle_status_update(f"Config JSON error: {e}", "red")
-
-            elif command_line == "STOP_DICTATION":
-                app._trigger_stop_dictation()
-
-            elif command_line == "ABORT_DICTATION":
-                app._trigger_abort_dictation()
-
-            elif command_line == "GET_HOTKEYS":
-                app._send_hotkeys_info()
-
-            elif command_line == "TOGGLE_ACTIVE":
-                app._toggle_program_active()
-
-            elif command_line == "RESTART_APP":
-                app._trigger_restart()
-
-            elif command_line.startswith("SET_APP_STATE:"):
-                try:
-                    active_status = command_line[len("SET_APP_STATE:") :]
-                    active = active_status.lower() == "true"
-                    app.audio_handler.set_program_active(active)
-                    app._program_active = active  # Update internal state too
-                    log_text(
-                        "COMMAND", f"Set program active state via command: {active}"
-                    )
-                    app._update_app_state()  # Reflect state change to Electron
-                except ValueError:
-                    log_text(
-                        "COMMAND_ERROR",
-                        f"Invalid active state command format: {command_line}",
-                    )
-                    app._handle_status_update("Invalid state command.", "red")
-
-            elif command_line.startswith("VOCABULARY_API:"):
-                # Handle vocabulary API commands
-                try:
-                    # Parse the vocabulary command: VOCABULARY_API:messageId:{"command": "...", "data": {...}}
-                    parts = command_line.split(":", 2)
-                    if len(parts) >= 3:
-                        message_id = parts[1]
-                        command_data = json.loads(parts[2])
-                        
-                        # Import and call vocabulary API
-                        from src.vocabulary.vocabulary_api import handle_vocabulary_command
-                        result = handle_vocabulary_command(
-                            command_data.get("command", ""),
-                            **command_data.get("data", {})
-                        )
-                        
-                        # Send response back to Electron
-                        response_message = f"VOCAB_RESPONSE:{message_id}:{json.dumps(result)}"
-                        print(response_message, flush=True)
-                        sys.stdout.flush()
-                        
-                        log_text("VOCAB_API", f"Handled vocabulary command: {command_data.get('command')} - Success: {result.get('success')}")
-                    else:
-                        log_text("VOCAB_ERROR", f"Invalid vocabulary API command format: {command_line}")
-                        
-                except json.JSONDecodeError as e:
-                    log_text("VOCAB_ERROR", f"JSON decode error in vocabulary API: {e}")
-                except Exception as e:
-                    log_text("VOCAB_ERROR", f"Error handling vocabulary API: {e}")
-                    # Send error response
-                    if 'message_id' in locals():
-                        error_response = f"VOCAB_RESPONSE:{message_id}:{json.dumps({'success': False, 'error': str(e)})}"
-                        print(error_response, flush=True)
-                        sys.stdout.flush()
-
-            elif command_line.startswith("ENSURE_MODEL:"):
-                parts = command_line.split(":", 2)
-                if len(parts) < 3:
-                    log_text("COMMAND_ERROR", f"Invalid ENSURE_MODEL command: {command_line}")
-                    continue
-                request_id = parts[1]
-                repo_id = parts[2]
-                if repo_id.lower().startswith("apple:"):
-                    # Verify helper app exists (dev or bundled).
-                    helper_candidates = [
-                        os.path.abspath(config.resolve_resource_path("AppleSpeechHelper.app")),
-                        os.path.abspath(os.path.join(os.path.dirname(__file__), "tools", "apple_speech_helper", "dist", "AppleSpeechHelper.app")),
-                    ]
-                    helper_path = next((p for p in helper_candidates if os.path.isdir(p) and p.lower().endswith(".app")), None)
-                    if not helper_path:
-                        error_payload = {
-                            "success": False,
-                            "modelId": repo_id,
-                            "error": "AppleSpeechHelper.app not found. Build it with: bash tools/apple_speech_helper/build.sh"
-                        }
-                        print(f"MODEL_ERROR:{request_id}:{json.dumps(error_payload)}", flush=True)
-                        sys.stdout.flush()
-                        log_text("COMMAND_ERROR", f"Apple model selected but helper missing: {repo_id}")
-                        continue
-                    response = {
-                        "success": True,
-                        "modelId": repo_id,
-                        "localPath": helper_path,
-                        "message": "Apple Speech selected (helper found; no model download required)."
-                    }
-                    print(f"MODEL_READY:{request_id}:{json.dumps(response)}", flush=True)
-                    sys.stdout.flush()
-                    log_text("COMMAND", f"No-op ensure for Apple model: {repo_id}")
-                    continue
-                try:
-                    local_path = app.transcription_handler.ensure_model_assets(repo_id)
-                    response = {
-                        "success": True,
-                        "modelId": repo_id,
-                        "localPath": local_path,
-                        "message": "Model assets ready."
-                    }
-                    print(f"MODEL_READY:{request_id}:{json.dumps(response)}", flush=True)
-                    sys.stdout.flush()
-                    log_text("COMMAND", f"Model assets ensured for {repo_id}")
-                except Exception as ensure_err:
-                    error_payload = {
-                        "success": False,
-                        "modelId": repo_id,
-                        "error": str(ensure_err)
-                    }
-                    print(f"MODEL_ERROR:{request_id}:{json.dumps(error_payload)}", flush=True)
-                    sys.stdout.flush()
-                    log_text("COMMAND_ERROR", f"Failed to ensure model {repo_id}: {ensure_err}")
-
-            elif command_line.startswith("REPASTE:"):
-                repaste_text = command_line[len("REPASTE:"):]
-                if repaste_text:
-                    log_text("REPASTE", f"Re-pasting text: {repaste_text[:50]}...")
-                    send_text_to_citrix(repaste_text + " ")
-                else:
-                    log_text("REPASTE", "Empty repaste text, ignoring.")
-
-            elif command_line == "start_dictate":
-                app._handle_hotkey(config.COMMAND_START_DICTATE)
-
-            elif command_line == "MODELS_REQUEST":
-                # Send available models list to Electron
-                models_payload = json.dumps(config.AVAILABLE_ASR_MODELS)
-                print(f"MODELS_LIST:{models_payload}", flush=True)
-                sys.stdout.flush()
-                log_text("COMMAND", "Sent MODELS_LIST to Electron")
-
-            elif command_line.startswith("RETRANSCRIBE_AUDIO:"):
-                # Handle re-transcription request: RETRANSCRIBE_AUDIO:<requestId>:<entryId>:<modelId>
-                try:
-                    parts = command_line.split(":", 3)
-                    if len(parts) < 4:
-                        log_text("RETRANSCRIBE_ERROR", f"Invalid RETRANSCRIBE_AUDIO format: {command_line}")
-                        continue
-                    
-                    request_id = parts[1]
-                    entry_id = parts[2]
-                    model_id = parts[3]
-                    
-                    log_text("RETRANSCRIBE", f"Starting retranscription: entry={entry_id}, model={model_id}")
-                    
-                    # Load audio file from history
-                    audio_path = os.path.join("data", "history", "audio", f"{entry_id}.wav")
-                    if not os.path.exists(audio_path):
-                        error_payload = {
-                            "success": False,
-                            "error": f"Audio file not found: {audio_path}"
-                        }
-                        print(f"RETRANSCRIBE_RESULT:{request_id}:{json.dumps(error_payload)}", flush=True)
-                        sys.stdout.flush()
-                        continue
-                    
-                    # Create a temporary transcription handler with the specified model
-                    import time
-                    start_time = time.time()
-                    
-                    # Use the existing transcription handler's retranscribe method
-                    result_text = app.transcription_handler.retranscribe_audio_file(audio_path, model_id)
-                    
-                    # Apply filler word removal (same as live transcription)
-                    if result_text:
-                        # Optional: Enhance with MedGemma LLM if MedASR is used
-                        use_llm_enhancement = settings_manager.get_setting("useMedGemmaPostProcessing", False)
-                        if use_llm_enhancement and model_id == "google/medasr":
-                            log_text("LLM_ENHANCE", "Enhancing retranscription with MedGemma...")
-                            result_text = llm_postprocessor.enhance_medical_transcription(result_text)
-                        
-                        result_text = text_processor.clean_text(result_text)
-                    
-                    duration = time.time() - start_time
-                    
-                    response = {
-                        "success": True,
-                        "entryId": entry_id,
-                        "modelId": model_id,
-                        "transcript": result_text,
-                        "duration": round(duration, 2)
-                    }
-                    print(f"RETRANSCRIBE_RESULT:{request_id}:{json.dumps(response)}", flush=True)
-                    sys.stdout.flush()
-                    log_text("RETRANSCRIBE", f"Completed retranscription in {duration:.2f}s")
-                    
-                except Exception as retrans_err:
-                    log_text("RETRANSCRIBE_ERROR", f"Retranscription failed: {retrans_err}")
-                    error_payload = {
-                        "success": False,
-                        "error": str(retrans_err)
-                    }
-                    if 'request_id' in locals():
-                        print(f"RETRANSCRIBE_RESULT:{request_id}:{json.dumps(error_payload)}", flush=True)
-                        sys.stdout.flush()
-
-            elif command_line == "SHUTDOWN":
-                log_text("COMMAND", "Shutdown command received from Electron.")
-                # app.shutdown() # Shutdown is handled in finally block
-                break  # Exit the loop and end the backend process
-
-            else:
-                log_text("COMMAND_UNKNOWN", f"Unknown command received: {command_line}")
-                print(
-                    f"UNKNOWN_COMMAND:{command_line}", flush=True
-                )  # For debugging in Electron
-                sys.stdout.flush()  # Explicit flush
+            should_continue = app.process_stdin_command(command_line)
+            if not should_continue:
+                break
 
     except BrokenPipeError:
         log_text("PIPE_ERROR", "Broken pipe error (Electron likely closed). Exiting.")

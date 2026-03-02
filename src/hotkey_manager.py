@@ -41,10 +41,58 @@ except ImportError:
 
 import threading
 import time
+import re
 
 # Import configuration constants
 from src.config import config
 from src.utils.utils import log_text
+
+
+def _canonicalize_shortcut_tokens(shortcut: str):
+    if not isinstance(shortcut, str):
+        return []
+    raw_tokens = [token.strip() for token in shortcut.replace(" ", "").split("+")]
+    return [token for token in raw_tokens if token]
+
+
+def _token_to_key(token: str):
+    normalized = token.lower()
+    modifier_map = {
+        "cmd": getattr(keyboard.Key, "cmd", None),
+        "command": getattr(keyboard.Key, "cmd", None),
+        "ctrl": getattr(keyboard.Key, "ctrl", None),
+        "control": getattr(keyboard.Key, "ctrl", None),
+        "alt": getattr(keyboard.Key, "alt", None),
+        "option": getattr(keyboard.Key, "alt", None),
+        "shift": getattr(keyboard.Key, "shift", None),
+        "space": getattr(keyboard.Key, "space", None),
+    }
+    if normalized in modifier_map:
+        return modifier_map[normalized]
+
+    if len(token) == 1 and re.match(r"[A-Za-z0-9]", token):
+        return keyboard.KeyCode.from_char(token.lower())
+
+    return None
+
+
+def parse_shortcut_to_combo(shortcut: str):
+    tokens = _canonicalize_shortcut_tokens(shortcut)
+    if not tokens:
+        return None
+
+    keys = set()
+    for token in tokens:
+        resolved = _token_to_key(token)
+        if resolved is None:
+            return None
+        keys.add(resolved)
+
+    return frozenset(keys) if keys else None
+
+
+def build_default_hotkey_bindings():
+    return dict(config.HOTKEY_COMBINATIONS)
 
 
 class HotkeyManager:
@@ -67,11 +115,60 @@ class HotkeyManager:
         self._stop_event = threading.Event()
         self._current_keys = set()  # Keep track of currently pressed keys
         self._is_dictating = False  # Track if dictation mode is active
+        self._pending_command = None  # Defer dispatch until all combo keys are released
+        self._pending_command_armed_at = 0.0
+        self._pending_command_timeout_seconds = 0.75
+        self._hotkey_combinations = None  # None means follow config.HOTKEY_COMBINATIONS dynamically
+        self._hotkeys_suspended = False  # Temporarily disable dispatch (e.g., while editing shortcuts)
+
+    def _get_active_hotkey_combinations(self):
+        if self._hotkey_combinations is None:
+            return config.HOTKEY_COMBINATIONS
+        return self._hotkey_combinations
 
     def set_dictating_state(self, is_dictating: bool):
         """Update the dictation state."""
         self._is_dictating = is_dictating
         # log_text("HOTKEY_DEBUG", f"Dictation state set to: {self._is_dictating}")
+
+    def set_hotkeys_suspended(self, suspended: bool):
+        """Temporarily suspend hotkey dispatch without stopping the listener."""
+        suspended_bool = bool(suspended)
+        if self._hotkeys_suspended == suspended_bool:
+            return
+        self._hotkeys_suspended = suspended_bool
+        self._current_keys.clear()
+        self._clear_pending_command()
+        if suspended_bool:
+            self._log_status("Hotkey dispatch suspended.", "grey")
+        else:
+            self._log_status("Hotkey dispatch resumed.", "grey")
+
+    def _dispatch_hotkey_command(self, command: str):
+        """Dispatch a hotkey command through the registered callback."""
+        if self.on_hotkey:
+            try:
+                self.on_hotkey(command)
+            except Exception as e:
+                self._log_status(
+                    f"Error executing hotkey callback for '{command}': {e}",
+                    "red",
+                )
+
+    def _clear_pending_command(self):
+        self._pending_command = None
+        self._pending_command_armed_at = 0.0
+
+    def _dispatch_pending_command_if_ready(self, force: bool = False):
+        """Dispatch deferred combo once all keys are released (or forced on timeout)."""
+        if not self._pending_command:
+            return
+        if not force and self._current_keys:
+            return
+
+        pending = self._pending_command
+        self._clear_pending_command()
+        self._dispatch_hotkey_command(pending)
 
     def _log_status(self, message, color="black"):
         """Helper to call the status update callback if available."""
@@ -111,6 +208,11 @@ class HotkeyManager:
     def _on_press(self, key):
         """Callback function for key press events."""
         try:
+            if self._hotkeys_suspended:
+                self._current_keys.clear()
+                self._clear_pending_command()
+                return
+
             normalized_key = self._normalize_key(key)
             # log_text("HOTKEY_DEBUG", f"Key pressed: {key} (Normalized: {normalized_key})")
             self._current_keys.add(normalized_key)
@@ -119,15 +221,8 @@ class HotkeyManager:
             if self._is_dictating and key == keyboard.Key.space:
                 # log_text("HOTKEY_DEBUG", "Space bar pressed during dictation. Stopping.")
                 self._log_status("Space bar pressed, stopping dictation...", "blue")
-                if self.on_hotkey:
-                    try:
-                        # Trigger the stop command immediately on press
-                        self.on_hotkey(config.COMMAND_STOP_DICTATE)
-                    except Exception as e:
-                        self._log_status(
-                            f"Error executing hotkey callback for '{config.COMMAND_STOP_DICTATE}': {e}",
-                            "red",
-                        )
+                # Trigger the stop command immediately on press
+                self._dispatch_hotkey_command(config.COMMAND_STOP_DICTATE)
                 # Prevent space from being added to the set if it stops dictation
                 self._current_keys.discard(normalized_key)
                 return  # Stop further processing for this key press
@@ -142,30 +237,42 @@ class HotkeyManager:
             normalized_key = self._normalize_key(key)
             # log_text("HOTKEY_DEBUG", f"Key released: {key} (Normalized: {normalized_key})")
 
+            if self._hotkeys_suspended:
+                self._current_keys.discard(normalized_key)
+                self._clear_pending_command()
+                return
+
             # Check for combination *before* removing the key
             current_combination = frozenset(self._current_keys)
             # log_text("HOTKEY_DEBUG", f"Current combination: {current_combination}")
-            if current_combination in config.HOTKEY_COMBINATIONS:
-                command = config.HOTKEY_COMBINATIONS[current_combination]
-                # log_text("HOTKEY_DEBUG", f"Hotkey detected: {current_combination} -> {command}")
+            active_hotkeys = self._get_active_hotkey_combinations()
+            if (
+                self._pending_command is None
+                and current_combination in active_hotkeys
+            ):
+                command = active_hotkeys[current_combination]
+                # We detect on first release, but defer execution until all keys are
+                # physically released to avoid modifier bleed (e.g., Cmd+Shift still held).
+                self._pending_command = command
+                self._pending_command_armed_at = time.monotonic()
                 self._log_status(
-                    f"Hotkey detected on release: {current_combination} -> {command}",
+                    f"Hotkey detected on release: {current_combination} -> {command} (pending full key-up)",
                     "blue",
                 )
-                if self.on_hotkey:
-                    try:
-                        self.on_hotkey(command)
-                    except Exception as e:
-                        self._log_status(
-                            f"Error executing hotkey callback for '{command}': {e}",
-                            "red",
-                        )
-                # Clear after a successful match to avoid stale keys causing missed combos.
-                self._current_keys.clear()
-                return
 
             # Now remove the key
             self._current_keys.discard(normalized_key)
+            if self._pending_command:
+                pending_age_seconds = time.monotonic() - self._pending_command_armed_at
+                if self._current_keys and pending_age_seconds >= self._pending_command_timeout_seconds:
+                    self._log_status(
+                        "Pending hotkey timed out waiting for key release; dispatching now.",
+                        "orange",
+                    )
+                    self._current_keys.clear()
+                    self._dispatch_pending_command_if_ready(force=True)
+                else:
+                    self._dispatch_pending_command_if_ready()
         except KeyError:
             # Key might have been released that wasn't tracked (e.g., if listener started while key was held)
             # log_text("HOTKEY_DEBUG", f"Key {normalized_key} released but not found in current keys.")
@@ -208,6 +315,7 @@ class HotkeyManager:
 
         self._stop_event.clear()
         self._current_keys.clear()  # Reset keys on start
+        self._clear_pending_command()
         self._listener_thread = threading.Thread(
             target=self._run_listener, daemon=False
         )  # Make thread non-daemon
@@ -240,6 +348,59 @@ class HotkeyManager:
 
         self._listener_thread = None
         self._current_keys.clear()  # Clear keys on stop
+        self._clear_pending_command()
+
+    def get_hotkey_combinations(self):
+        return dict(self._get_active_hotkey_combinations())
+
+    def update_shortcut_bindings(self, shortcut_map: dict):
+        """
+        Update core user-facing shortcut bindings.
+        shortcut_map keys:
+          - transcribe
+          - stopTranscribing
+          - retranscribeBackup
+        """
+        updated = build_default_hotkey_bindings()
+
+        def remove_command_bindings(command_name: str):
+            to_remove = [keys for keys, mapped_command in updated.items() if mapped_command == command_name]
+            for keys in to_remove:
+                del updated[keys]
+
+        # Remove defaults for user-configurable actions before applying new settings.
+        for command_name in (
+            config.COMMAND_TOGGLE_DICTATE,
+            config.COMMAND_STOP_DICTATE,
+            config.COMMAND_RETRANSCRIBE_SECONDARY,
+        ):
+            remove_command_bindings(command_name)
+
+        transcribe_combo = parse_shortcut_to_combo(shortcut_map.get("transcribe", ""))
+        stop_combo = parse_shortcut_to_combo(shortcut_map.get("stopTranscribing", ""))
+        retranscribe_combo = parse_shortcut_to_combo(shortcut_map.get("retranscribeBackup", ""))
+
+        # If transcribe + stop share the same combo, use toggle behavior.
+        if transcribe_combo is not None and stop_combo is not None and transcribe_combo == stop_combo:
+            updated[transcribe_combo] = config.COMMAND_TOGGLE_DICTATE
+        else:
+            if transcribe_combo is not None:
+                updated[transcribe_combo] = config.COMMAND_TOGGLE_DICTATE
+            if stop_combo is not None:
+                updated[stop_combo] = config.COMMAND_STOP_DICTATE
+
+        if retranscribe_combo is not None:
+            existing_command = updated.get(retranscribe_combo)
+            if existing_command and existing_command != config.COMMAND_RETRANSCRIBE_SECONDARY:
+                self._log_status(
+                    "Re-transcribe shortcut conflicts with another action; keeping primary action binding.",
+                    "orange",
+                )
+            else:
+                updated[retranscribe_combo] = config.COMMAND_RETRANSCRIBE_SECONDARY
+
+        self._hotkey_combinations = updated
+        self._log_status("Hotkey bindings updated from settings.", "grey")
 
 
 # Example Usage (for testing purposes)

@@ -18,6 +18,9 @@ jobs:
     
     steps:
     - uses: actions/checkout@v4
+
+    - name: Verify sensitive runtime paths are git-ignored
+      run: python scripts/check_sensitive_paths_ignored.py
     
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v4

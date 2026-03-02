@@ -1,0 +1,13 @@
+{
+  "width": 172,
+  "height": 36,
+  "cornerRadius": 18,
+  "bottomOffset": 28,
+  "bars": {
+    "count": 9,
+    "width": 6,
+    "gap": 3,
+    "minHeight": 4,
+    "maxHeight": 20
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "prefixes": {
+    "state": "STATE:",
+    "status": "STATUS:",
+    "audioMetrics": "AUDIO_METRICS:",
+    "audioAmplitudeLegacy": "AUDIO_AMP:",
+    "audioLevelsLegacy": "AUDIO_LEVELS:",
+    "finalTranscript": "FINAL_TRANSCRIPT:",
+    "historyEntry": "HISTORY_ENTRY:",
+    "retranscribeStart": "RETRANSCRIBE_START:",
+    "retranscribeEnd": "RETRANSCRIBE_END:",
+    "retranscribeQuickResult": "RETRANSCRIBE_QUICK_RESULT:",
+    "hotkeys": "HOTKEYS:"
+  },
+  "audioStates": [
+    "inactive",
+    "preparing",
+    "activation",
+    "dictation",
+    "processing"
+  ],
+  "lifecycleStates": [
+    "idle",
+    "listening",
+    "recording",
+    "stopping",
+    "transcribing",
+    "inserting",
+    "error"
+  ]
+}

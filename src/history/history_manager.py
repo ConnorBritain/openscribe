@@ -3,7 +3,6 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-
 class HistoryManager:
     """
     Persists dictation history entries (transcripts + optional audio) to disk.
@@ -52,8 +51,8 @@ class HistoryManager:
         record = {
             "id": entry_id,
             "createdAt": datetime.now(timezone.utc).isoformat(),
-            "transcript": transcript,
-            "processedTranscript": processed_transcript,
+            "transcript": transcript or "",
+            "processedTranscript": processed_transcript or "",
             "durationSeconds": duration_seconds,
             "audioFile": audio_file_path,
             "startedAt": started_at,

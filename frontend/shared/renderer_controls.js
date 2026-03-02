@@ -1,7 +1,13 @@
 // renderer_controls.js
 // Handles button clicks and keyboard shortcuts for stop/cancel functionality
 
-import { stopButton, cancelButton, alwaysOnTopButton, wakeWordToggleButton } from './renderer_ui.js';
+import {
+  stopButton,
+  cancelButton,
+  alwaysOnTopButton,
+  wakeWordToggleButton,
+  pillCancelButton
+} from './renderer_ui.js';
 import { logMessage } from './renderer_utils.js';
 import { updateStatusIndicator } from './renderer_state.js';
 
@@ -22,6 +28,18 @@ export function initializeControls() {
   if (cancelButton) {
     cancelButton.addEventListener('click', () => {
       logMessage('Cancel button clicked', 'controls');
+      if (window.electronAPI && window.electronAPI.abortDictation) {
+        window.electronAPI.abortDictation();
+      } else {
+        logMessage('electronAPI.abortDictation not available', 'error');
+      }
+    });
+  }
+
+  // Compact pill cancel button (Handy-style) mirrors main cancel behavior
+  if (pillCancelButton) {
+    pillCancelButton.addEventListener('click', () => {
+      logMessage('Pill cancel button clicked', 'controls');
       if (window.electronAPI && window.electronAPI.abortDictation) {
         window.electronAPI.abortDictation();
       } else {

@@ -21,6 +21,7 @@ except ImportError:
         shift = "shift"
         alt = "alt"
         ctrl = "ctrl"
+        space = "space"
     
     class MockKeyCode:
         @staticmethod
@@ -94,6 +95,7 @@ AVAILABLE_ASR_MODELS = {
     "Parakeet-TDT-0.6B-v2": "mlx-community/parakeet-tdt-0.6b-v2",
     "Parakeet-TDT-0.6B-v3": "mlx-community/parakeet-tdt-0.6b-v3",
     "Whisper (large-v3-turbo)": "mlx-community/whisper-large-v3-turbo",
+    "Distil-Whisper (large-v3, fast)": "mlx-community/distil-whisper-large-v3",
     "Voxtral Mini 3B (bf16)": "mlx-community/Voxtral-Mini-3B-2507-bf16",
     "MedASR (Medical)": "google/medasr",
     "Apple Speech (on-device, macOS)": "apple:speech:ondevice",
@@ -122,6 +124,7 @@ MLX_WHISPER_DECODE_OPTIONS = {}
 COMMAND_TOGGLE_ACTIVE = "toggle_active"
 COMMAND_START_DICTATE = "start_dictate"
 COMMAND_STOP_DICTATE = "stop_dictate"  # Added for explicit stop hotkey
+COMMAND_TOGGLE_DICTATE = "toggle_dictate"
 COMMAND_ABORT_DICTATE = "abort_dictate"  # Added for abort/cancel hotkey
 COMMAND_RESTART = "restart"
 COMMAND_SHOW_HOTKEYS = "show_hotkeys"
@@ -141,12 +144,17 @@ WAKE_WORDS = {
 # Example: {Key.cmd, Key.shift, 'a'}
 HOTKEY_COMBINATIONS = {
     frozenset({Key.cmd, Key.shift, KeyCode.from_char("a")}): COMMAND_TOGGLE_ACTIVE,
+    frozenset({Key.alt, Key.space}): COMMAND_TOGGLE_DICTATE,
     frozenset({Key.cmd, Key.shift, KeyCode.from_char("d")}): COMMAND_START_DICTATE,
     frozenset({Key.cmd, Key.shift, KeyCode.from_char("s")}): COMMAND_STOP_DICTATE,
     frozenset({Key.cmd, Key.shift, KeyCode.from_char("r")}): COMMAND_RESTART,
     frozenset({Key.cmd, Key.shift, KeyCode.from_char("h")}): COMMAND_SHOW_HOTKEYS,
     frozenset({Key.cmd, Key.shift, KeyCode.from_char("m")}): COMMAND_TOGGLE_MINI_MODE,
     frozenset({Key.cmd, Key.shift, KeyCode.from_char("x")}): COMMAND_RETRANSCRIBE_SECONDARY,
+    # Fallback debug shortcut for secondary retranscribe.
+    frozenset({Key.cmd, Key.alt, KeyCode.from_char("x")}): COMMAND_RETRANSCRIBE_SECONDARY,
+    # Safer fallback that avoids Cmd+X style edit shortcuts in focused apps.
+    frozenset({Key.ctrl, Key.alt, KeyCode.from_char("r")}): COMMAND_RETRANSCRIBE_SECONDARY,
 }
 
 # --- GUI ---

@@ -5,7 +5,12 @@ const { ipcMain } = require('electron');
 const { setTrayIconByState, refreshTrayMenu } = require('./electron_tray');
 const { store } = require('./electron_app_init'); // For accessing electron-store
 const { getPythonShell, getActualAvailableLLMs } = require('./electron_python');
+const { applyMainWindowUiMode } = require('./electron_windows');
 const historyService = require('./history_service');
+const handyUiConstants = require('../frontend/shared/handy_ui_constants.json');
+const ipcContract = require('./ipc_contract');
+const { buildPythonConfigFromStore } = require('./python_config_payload');
+const { ELECTRON_DEFAULTS } = require('./settings_contract');
 
 function initializeIpcHandlers() {
   // Handle tray icon state updates from renderer
@@ -48,17 +53,9 @@ function initializeIpcHandlers() {
     try {
       const pythonShell = getPythonShell();
       if (pythonShell && pythonShell.send) {
-        const configPayload = {
-          wakeWords: store.get('wakeWords', { dictate: [] }),
-          filterFillerWords: store.get('filterFillerWords', true),
-          fillerWords: store.get('fillerWords', []),
-          autoStopOnSilence: store.get('autoStopOnSilence', true),
-          wakeWordEnabled: enabledBool
-        };
-        const savedAsrModel = store.get('selectedAsrModel');
-        if (savedAsrModel) {
-          configPayload.selectedAsrModel = savedAsrModel;
-        }
+        const configPayload = buildPythonConfigFromStore(store, {
+          overrides: { wakeWordEnabled: enabledBool },
+        });
         const msg = `CONFIG:${JSON.stringify(configPayload)}`;
         pythonShell.send(msg);
         console.log('[IPC] Wake word setting pushed to Python backend.');
@@ -85,6 +82,7 @@ function initializeIpcHandlers() {
   ipcMain.on('save-settings', (_event, settings) => {
     console.log('[IPC] save-settings received:', settings);
     if (settings) {
+      let requestedUiMode = null;
       // Save wake words
       if (settings.wakeWords) {
         store.set('wakeWords', settings.wakeWords);
@@ -92,6 +90,10 @@ function initializeIpcHandlers() {
       if (typeof settings.wakeWordEnabled === 'boolean') {
         store.set('wakeWordEnabled', settings.wakeWordEnabled);
         refreshTrayMenu();
+      }
+      if (typeof settings.uiMode === 'string') {
+        requestedUiMode = settings.uiMode === 'handy' ? 'handy' : 'classic';
+        store.set('uiMode', requestedUiMode);
       }
       // Save ASR model selection
       if (settings.selectedAsrModel) {
@@ -106,8 +108,27 @@ function initializeIpcHandlers() {
       if (typeof settings.autoStopOnSilence === 'boolean') {
         store.set('autoStopOnSilence', settings.autoStopOnSilence);
       }
+      if (typeof settings.medicationAutoLearnEnabled === 'boolean') {
+        store.set('medicationAutoLearnEnabled', settings.medicationAutoLearnEnabled);
+      }
       if (settings.secondaryAsrModel !== undefined) {
         store.set('secondaryAsrModel', settings.secondaryAsrModel);
+      }
+      if (settings.selectedMicrophoneId !== undefined) {
+        store.set('selectedMicrophoneId', settings.selectedMicrophoneId || 'default');
+      }
+      if (typeof settings.transcribeShortcut === 'string' && settings.transcribeShortcut.trim()) {
+        store.set('transcribeShortcut', settings.transcribeShortcut.trim());
+      }
+      if (typeof settings.stopTranscribingShortcut === 'string' && settings.stopTranscribingShortcut.trim()) {
+        store.set('stopTranscribingShortcut', settings.stopTranscribingShortcut.trim());
+      }
+      if (typeof settings.retranscribeBackupShortcut === 'string' && settings.retranscribeBackupShortcut.trim()) {
+        store.set('retranscribeBackupShortcut', settings.retranscribeBackupShortcut.trim());
+      }
+
+      if (requestedUiMode) {
+        applyMainWindowUiMode(requestedUiMode);
       }
       console.log('[IPC] Settings saved to store.');
 
@@ -115,21 +136,7 @@ function initializeIpcHandlers() {
       try {
         const pythonShell = getPythonShell();
         if (pythonShell && pythonShell.send) {
-          const configPayload = {
-            wakeWords: store.get('wakeWords', { dictate: [] }),
-            filterFillerWords: store.get('filterFillerWords', true),
-            fillerWords: store.get('fillerWords', []),
-            autoStopOnSilence: store.get('autoStopOnSilence', true),
-            wakeWordEnabled: store.get('wakeWordEnabled', true)
-          };
-          const savedAsrModel = store.get('selectedAsrModel');
-          if (savedAsrModel) {
-            configPayload.selectedAsrModel = savedAsrModel;
-          }
-          const savedSecondaryModel = store.get('secondaryAsrModel');
-          if (savedSecondaryModel) {
-            configPayload.secondaryAsrModel = savedSecondaryModel;
-          }
+          const configPayload = buildPythonConfigFromStore(store);
           const msg = `CONFIG:${JSON.stringify(configPayload)}`;
           pythonShell.send(msg);
           console.log('[IPC] Pushed updated CONFIG to Python backend.');
@@ -144,18 +151,105 @@ function initializeIpcHandlers() {
 
   // Handle settings loading
   ipcMain.handle('load-settings', async () => {
+    const defaults = ELECTRON_DEFAULTS;
     const settings = {
-      wakeWords: store.get('wakeWords', { dictate: [] }),
-      selectedAsrModel: store.get('selectedAsrModel', ''),
-      filterFillerWords: store.get('filterFillerWords', true),
-      fillerWords: store.get('fillerWords', []),
-      autoStopOnSilence: store.get('autoStopOnSilence', true),
-      wakeWordEnabled: store.get('wakeWordEnabled', true),
-      secondaryAsrModel: store.get('secondaryAsrModel', null),
+      wakeWords: store.get('wakeWords', defaults.wakeWords),
+      selectedAsrModel: store.get('selectedAsrModel', defaults.selectedAsrModel),
+      filterFillerWords: store.get('filterFillerWords', defaults.filterFillerWords),
+      fillerWords: store.get('fillerWords', defaults.fillerWords),
+      autoStopOnSilence: store.get('autoStopOnSilence', defaults.autoStopOnSilence),
+      wakeWordEnabled: store.get('wakeWordEnabled', defaults.wakeWordEnabled),
+      medicationAutoLearnEnabled: store.get('medicationAutoLearnEnabled', defaults.medicationAutoLearnEnabled),
+      uiMode: store.get('uiMode', defaults.uiMode) === 'handy' ? 'handy' : 'classic',
+      secondaryAsrModel: store.get('secondaryAsrModel', defaults.secondaryAsrModel),
+      selectedMicrophoneId: store.get('selectedMicrophoneId', defaults.selectedMicrophoneId),
+      transcribeShortcut: store.get('transcribeShortcut', defaults.transcribeShortcut),
+      stopTranscribingShortcut: store.get('stopTranscribingShortcut', defaults.stopTranscribingShortcut),
+      retranscribeBackupShortcut: store.get('retranscribeBackupShortcut', defaults.retranscribeBackupShortcut),
       availableModels: getActualAvailableLLMs() || []
     };
     console.log('[IPC] load-settings: returning', settings);
     return settings;
+  });
+
+  ipcMain.handle('load-ui-mode', async () => {
+    return store.get('uiMode', ELECTRON_DEFAULTS.uiMode) === 'handy' ? 'handy' : 'classic';
+  });
+
+  ipcMain.handle('load-handy-ui-constants', async () => {
+    return handyUiConstants;
+  });
+
+  ipcMain.handle('load-ipc-contract', async () => {
+    return {
+      version: ipcContract.IPC_SCHEMA_VERSION,
+      prefixes: ipcContract.PREFIXES,
+      audioStates: ipcContract.AUDIO_STATES_LIST,
+      lifecycleStates: ipcContract.LIFECYCLE_STATES_LIST
+    };
+  });
+
+  ipcMain.handle('set-hotkeys-suspended', async (_event, suspended) => {
+    const pythonShell = getPythonShell();
+    if (!pythonShell || !pythonShell.send) {
+      return { success: false, error: 'Python backend not available.' };
+    }
+    try {
+      const suspendedBool = !!suspended;
+      pythonShell.send(`SET_HOTKEYS_SUSPENDED:${suspendedBool ? 'true' : 'false'}`);
+      return { success: true };
+    } catch (error) {
+      console.error('[IPC] Failed to set hotkey suspended state:', error);
+      return { success: false, error: String(error) };
+    }
+  });
+
+  ipcMain.handle('list-microphones', async () => {
+    const pythonShell = getPythonShell();
+    if (!pythonShell || !pythonShell.send) {
+      return { success: false, devices: [], error: 'Python backend not available.' };
+    }
+
+    return new Promise((resolve) => {
+      const requestId = `mics_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      let resolved = false;
+
+      const cleanup = () => {
+        pythonShell.removeListener('message', messageHandler);
+      };
+
+      const resolveOnce = (payload) => {
+        if (!resolved) {
+          resolved = true;
+          cleanup();
+          resolve(payload);
+        }
+      };
+
+      const messageHandler = (message) => {
+        if (typeof message !== 'string') {
+          return;
+        }
+        const prefix = `MICROPHONES_LIST:${requestId}:`;
+        if (!message.startsWith(prefix)) {
+          return;
+        }
+        const payload = message.substring(prefix.length);
+        try {
+          const parsed = JSON.parse(payload);
+          resolveOnce(parsed);
+        } catch (error) {
+          resolveOnce({ success: false, devices: [], error: `Malformed microphone payload: ${error}` });
+        }
+      };
+
+      pythonShell.on('message', messageHandler);
+      pythonShell.send(`LIST_MICROPHONES:${requestId}`);
+
+      setTimeout(() => {
+        resolveOnce({ success: false, devices: [], error: 'Timed out while fetching microphones.' });
+      }, 5000);
+    });
   });
 
   ipcMain.handle('ensure-model', async (_event, modelId) => {

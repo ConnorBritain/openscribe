@@ -2,19 +2,12 @@
 // Handles app initialization, config, and persistent settings
 
 const Store = require('electron-store');
+const { ELECTRON_DEFAULTS } = require('./settings_contract');
+const DEFAULT_WAKE_WORDS = ELECTRON_DEFAULTS.wakeWords || { dictate: ['note'] };
 
 // Initialize electron-store
 const store = new Store({
-  defaults: {
-    wakeWords: {
-      dictate: ['note']
-    },
-    wakeWordEnabled: true,
-    selectedAsrModel: '',
-    filterFillerWords: true,
-    fillerWords: ['um', 'uh', 'ah', 'er', 'hmm', 'mm', 'mhm'],
-    autoStopOnSilence: true
-  },
+  defaults: ELECTRON_DEFAULTS,
   migrations: {
     '1.0.0-migrateWakeWords': store => {
       const wakeWords = store.get('wakeWords');
@@ -23,9 +16,7 @@ const store = new Store({
           dictate: wakeWords
         });
       } else if (typeof wakeWords !== 'object' || wakeWords === null || !Object.prototype.hasOwnProperty.call(wakeWords, 'dictate')) {
-        store.set('wakeWords', {
-          dictate: ['note']
-        });
+        store.set('wakeWords', DEFAULT_WAKE_WORDS);
       } else {
         const dictateWords = Array.isArray(wakeWords.dictate) ? wakeWords.dictate : [];
         store.set('wakeWords', { dictate: dictateWords });

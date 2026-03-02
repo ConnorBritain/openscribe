@@ -1,0 +1,16 @@
+{
+  "newDictationCount": 3,
+  "lastRunAt": "2026-03-02T04:41:53.827576+00:00",
+  "lastProcessedHistoryLine": 2766,
+  "lastSummary": {
+    "lastRunAt": "2026-03-02T04:41:53.827576+00:00",
+    "scannedRecords": 5,
+    "importedMappings": 0,
+    "queuedReviews": 0,
+    "pendingReviews": 0,
+    "lastProcessedHistoryLine": 2766,
+    "runReason": "auto",
+    "durationMs": 81,
+    "error": null
+  }
+}

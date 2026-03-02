@@ -1,7 +1,23 @@
 // renderer_state.js
 // Handles UI state management and status indicator updates
 
-import { statusDot, stopButton, cancelButton, modeIndicator, processingIndicator, amplitudes, wakeWordToggleButton } from './renderer_ui.js';
+import {
+  statusDot,
+  handyStatusDot,
+  stopButton,
+  cancelButton,
+  modeIndicator,
+  processingIndicator,
+  handyModeIndicator,
+  handyProcessingIndicator,
+  amplitudes,
+  wakeWordToggleButton,
+  activityPill,
+  activityLabel,
+  activityIcon,
+  pillCancelButton
+} from './renderer_ui.js';
+// Keep explicit stop/cancel pairing for legacy tests: stopButton, cancelButton
 import { conflictNotificationManager } from './renderer_conflict_ui.js';
 
 // Exported variable for the audio visualizer and other potential consumers
@@ -17,8 +33,76 @@ const STATUS_VISUALS = {
   gray: { color: '#8e8e93', shadow: null, visualizer: 'inactive' }
 };
 
+const ACTIVITY_PHASES = ['inactive', 'listening', 'recording', 'transcribing', 'error', 'retranscribing'];
+const LIFECYCLE_STATES = new Set(['idle', 'listening', 'recording', 'stopping', 'transcribing', 'inserting', 'error']);
+
+function isHandyMode() {
+  return !!(document.body && document.body.classList.contains('ui-mode-handy'));
+}
+
+function getStatusDots() {
+  return [statusDot, handyStatusDot].filter(Boolean);
+}
+
+function getActiveStatusDot() {
+  if (isHandyMode() && handyStatusDot) {
+    return handyStatusDot;
+  }
+  return statusDot || handyStatusDot || null;
+}
+
+function getModeIndicators() {
+  return [modeIndicator, handyModeIndicator].filter(Boolean);
+}
+
+function getProcessingIndicators() {
+  return [processingIndicator, handyProcessingIndicator].filter(Boolean);
+}
+
+function setModeIndicatorState(text, visible) {
+  getModeIndicators().forEach((indicator) => {
+    indicator.textContent = text;
+    indicator.style.display = visible ? 'inline-block' : 'none';
+  });
+}
+
+function setProcessingIndicatorState(text, visible, color = '') {
+  getProcessingIndicators().forEach((indicator) => {
+    indicator.textContent = text;
+    indicator.style.display = visible ? 'inline-block' : 'none';
+    indicator.style.color = color;
+  });
+}
+
+function setActivityPhase(phase, labelText) {
+  if (activityPill) {
+    ACTIVITY_PHASES.forEach((name) => {
+      activityPill.classList.remove(`state-${name}`);
+    });
+    activityPill.classList.add(`state-${phase}`);
+  }
+
+  if (activityLabel && typeof labelText === 'string') {
+    activityLabel.textContent = labelText;
+  }
+
+  if (activityIcon) {
+    const showBrain = phase === 'transcribing' || phase === 'retranscribing' || phase === 'error';
+    activityIcon.classList.toggle('show-ear', !showBrain);
+    activityIcon.classList.toggle('show-brain', showBrain);
+    activityIcon.classList.toggle('is-listening', phase === 'listening');
+    activityIcon.classList.toggle('is-recording', phase === 'recording');
+    activityIcon.classList.toggle('is-transcribing', phase === 'transcribing' || phase === 'retranscribing');
+    activityIcon.classList.toggle('is-error', phase === 'error');
+  }
+
+  if (pillCancelButton) {
+    pillCancelButton.style.display = phase === 'recording' ? 'inline-flex' : 'none';
+  }
+}
+
 function resolveStatusDot() {
-  return document.getElementById('status-dot') || statusDot;
+  return getActiveStatusDot();
 }
 
 function setVisualizerState(nextState) {
@@ -37,8 +121,8 @@ function setVisualizerState(nextState) {
 }
 
 function applyStatusDotVisuals(colorKey, overrideVisualizerState) {
-  const dot = resolveStatusDot();
-  if (!dot) {
+  const dots = getStatusDots();
+  if (dots.length === 0) {
     if (overrideVisualizerState) {
       setVisualizerState(overrideVisualizerState);
     }
@@ -49,8 +133,10 @@ function applyStatusDotVisuals(colorKey, overrideVisualizerState) {
   const visuals = STATUS_VISUALS[normalizedKey];
 
   if (visuals) {
-    dot.style.backgroundColor = visuals.color;
-    dot.style.boxShadow = visuals.shadow ? `0 0 5px ${visuals.shadow}` : 'none';
+    dots.forEach((dot) => {
+      dot.style.backgroundColor = visuals.color;
+      dot.style.boxShadow = visuals.shadow ? `0 0 5px ${visuals.shadow}` : 'none';
+    });
   } else if (typeof colorKey === 'string' && colorKey) {
     console.warn('[RendererState] Unknown status color:', colorKey);
   }
@@ -69,7 +155,8 @@ let internalState = {
   currentMode: null,
   microphoneError: null,
   lastConflictCheck: 0,
-  wakeWordEnabled: true
+  wakeWordEnabled: true,
+  dictationLifecycle: 'idle'
 };
 
 function updateWakeWordToggle(enabled, programActive) {
@@ -97,13 +184,13 @@ export function updateStatusIndicator(newState) {
   internalState.currentMode = newState.currentMode !== undefined ? newState.currentMode : internalState.currentMode;
   internalState.microphoneError = newState.microphoneError || null;
   internalState.wakeWordEnabled = typeof newState.wakeWordEnabled === 'boolean' ? newState.wakeWordEnabled : internalState.wakeWordEnabled;
+  if (typeof newState.dictationLifecycle === 'string' && LIFECYCLE_STATES.has(newState.dictationLifecycle)) {
+    internalState.dictationLifecycle = newState.dictationLifecycle;
+  }
 
   updateWakeWordToggle(internalState.wakeWordEnabled, internalState.programActive);
 
-  console.log('[RendererState] updateStatusIndicator called with:', newState);
-  console.log('[RendererState] Internal state after update:', internalState);
-
-  const dot = resolveStatusDot();
+  const dot = getActiveStatusDot();
   if (!dot) {
     return;
   }
@@ -111,67 +198,101 @@ export function updateStatusIndicator(newState) {
   if (!internalState.programActive) {
     if (internalState.microphoneError) {
       applyStatusDotVisuals('red', 'inactive');
-      dot.title = `Microphone Error: ${internalState.microphoneError}`;
-      dot.style.animation = 'pulse-error 2s infinite';
+      getStatusDots().forEach((statusElement) => {
+        statusElement.title = `Microphone Error: ${internalState.microphoneError}`;
+        statusElement.style.animation = 'pulse-error 2s infinite';
+      });
+      setActivityPhase('error', 'Mic Error');
     } else {
       applyStatusDotVisuals('grey', 'inactive');
-      dot.title = '';
-      dot.style.animation = '';
+      getStatusDots().forEach((statusElement) => {
+        statusElement.title = '';
+        statusElement.style.animation = '';
+      });
+      setActivityPhase('inactive', 'Idle');
     }
 
     if (stopButton) stopButton.disabled = true;
     if (cancelButton) cancelButton.disabled = true;
     setVisualizerState('inactive');
-    if (modeIndicator) modeIndicator.style.display = 'none';
-    if (processingIndicator) processingIndicator.style.display = 'none';
+    setModeIndicatorState('Note', false);
+    setProcessingIndicatorState('Transcribing', false);
     updateWakeWordToggle(internalState.wakeWordEnabled, internalState.programActive);
     return;
   }
 
-  dot.title = '';
-  dot.style.animation = '';
+  getStatusDots().forEach((statusElement) => {
+    statusElement.title = '';
+    statusElement.style.animation = '';
+  });
 
   let effectiveVisibleAudioState = internalState.audioState;
-  if (internalState.isDictating) {
+  if (internalState.dictationLifecycle === 'recording' || internalState.isDictating) {
     effectiveVisibleAudioState = 'dictation';
+  } else if (
+    internalState.dictationLifecycle === 'stopping' ||
+    internalState.dictationLifecycle === 'transcribing' ||
+    internalState.dictationLifecycle === 'inserting'
+  ) {
+    effectiveVisibleAudioState = 'processing';
+  } else if (internalState.dictationLifecycle === 'listening') {
+    effectiveVisibleAudioState = internalState.wakeWordEnabled ? 'activation' : 'inactive';
+  } else if (internalState.dictationLifecycle === 'idle') {
+    effectiveVisibleAudioState = 'inactive';
+  } else if (internalState.dictationLifecycle === 'error') {
+    effectiveVisibleAudioState = 'error';
   }
 
-  if (modeIndicator) modeIndicator.style.display = 'none';
-  if (processingIndicator) processingIndicator.style.display = 'none';
+  setModeIndicatorState('Note', false);
+  setProcessingIndicatorState('Transcribing', false);
 
   switch (effectiveVisibleAudioState) {
     case 'activation':
     case 'preparing':
       if (internalState.wakeWordEnabled) {
         applyStatusDotVisuals('blue', 'listening');
+        setActivityPhase('listening', 'Listening');
       } else {
         applyStatusDotVisuals('grey', 'inactive');
+        setActivityPhase('inactive', 'Wake Word Off');
       }
       if (stopButton) stopButton.disabled = true;
       if (cancelButton) cancelButton.disabled = true;
       break;
     case 'dictation':
       applyStatusDotVisuals('green', 'dictation');
+      setActivityPhase('recording', 'Recording');
       if (stopButton) stopButton.disabled = false;
       if (cancelButton) cancelButton.disabled = false;
-      if (modeIndicator && internalState.currentMode === 'dictate') {
-        modeIndicator.textContent = 'Note';
-        modeIndicator.style.display = 'inline-block';
+      if (internalState.currentMode === 'dictate') {
+        setModeIndicatorState('Note', false);
       }
       break;
     case 'processing':
       applyStatusDotVisuals('orange', 'inactive');
+      setActivityPhase('transcribing', internalState.dictationLifecycle === 'inserting' ? 'Inserting' : 'Transcribing');
       if (stopButton) stopButton.disabled = true;
       if (cancelButton) cancelButton.disabled = true;
-      if (processingIndicator) processingIndicator.style.display = 'inline-block';
+      setProcessingIndicatorState(
+        internalState.dictationLifecycle === 'inserting' ? 'Inserting' : 'Transcribing',
+        true
+      );
+      break;
+    case 'error':
+      applyStatusDotVisuals('red', 'inactive');
+      setActivityPhase('error', 'Error');
+      if (stopButton) stopButton.disabled = true;
+      if (cancelButton) cancelButton.disabled = true;
+      setProcessingIndicatorState('Retry', false);
       break;
     case 'inactive':
     default:
       applyStatusDotVisuals('grey', 'inactive');
+      setActivityPhase('inactive', 'Idle');
       if (stopButton) stopButton.disabled = true;
       if (cancelButton) cancelButton.disabled = true;
-      if (modeIndicator) modeIndicator.style.display = 'none';
-      if (processingIndicator) processingIndicator.style.display = 'none';
+      setModeIndicatorState('Note', false);
+      setProcessingIndicatorState('Transcribing', false);
       break;
   }
 
@@ -191,12 +312,15 @@ export function initializeStatusIndicator() {
     console.warn('[RendererState] statusDot element not found during initialization');
   }
 
+  setActivityPhase('inactive', 'Idle');
+
   updateStatusIndicator({
     programActive: false,
     audioState: 'inactive',
     isDictating: false,
     currentMode: null,
-    microphoneError: null
+    microphoneError: null,
+    dictationLifecycle: 'idle'
   });
 }
 
@@ -294,28 +418,29 @@ export function isConflictNotificationVisible() {
  * @param {boolean} isError   True if this is an error flash (will auto-hide).
  */
 export function showRetranscribeProgress(modelName, isError = false) {
-  const dot = resolveStatusDot();
+  const dot = getActiveStatusDot();
   if (dot) {
     if (isError) {
-      dot.style.animation = '';
+      getStatusDots().forEach((statusElement) => {
+        statusElement.style.animation = '';
+      });
       applyStatusDotVisuals('orange');
     } else {
-      dot.style.animation = 'pulse-retranscribe 1.2s ease-in-out infinite';
+      getStatusDots().forEach((statusElement) => {
+        statusElement.style.animation = 'pulse-retranscribe 1.2s ease-in-out infinite';
+      });
       applyStatusDotVisuals('blue');
     }
   }
 
-  const indicator = document.getElementById('processing-indicator');
-  if (indicator) {
-    indicator.textContent = isError ? modelName : `Re-transcribing with ${modelName}...`;
-    indicator.style.display = 'inline-block';
-    if (isError) {
-      indicator.style.color = '#ff9500';
-      // Auto-hide error after 3 seconds
-      setTimeout(() => hideRetranscribeProgress(), 3000);
-    } else {
-      indicator.style.color = '';
-    }
+  const text = isError ? modelName : `Re-transcribing with ${modelName}...`;
+  if (isError) {
+    setProcessingIndicatorState(text, true, '#ff9500');
+    setActivityPhase('error', 'Retranscribe Error');
+    setTimeout(() => hideRetranscribeProgress(), 3000);
+  } else {
+    setProcessingIndicatorState(text, true);
+    setActivityPhase('retranscribing', 'Re-transcribing');
   }
 }
 
@@ -323,14 +448,26 @@ export function showRetranscribeProgress(modelName, isError = false) {
  * Hide the re-transcription spinner and restore normal status dot state.
  */
 export function hideRetranscribeProgress() {
-  const dot = resolveStatusDot();
+  const dot = getActiveStatusDot();
   if (dot) {
-    dot.style.animation = '';
+    getStatusDots().forEach((statusElement) => {
+      statusElement.style.animation = '';
+    });
   }
 
-  const indicator = document.getElementById('processing-indicator');
-  if (indicator) {
-    indicator.style.display = 'none';
-    indicator.style.color = '';
+  setProcessingIndicatorState('Transcribing', false);
+
+  if (internalState.programActive) {
+    if (internalState.audioState === 'dictation' || internalState.isDictating) {
+      setActivityPhase('recording', 'Recording');
+    } else if (internalState.audioState === 'processing') {
+      setActivityPhase('transcribing', 'Transcribing');
+    } else if ((internalState.audioState === 'activation' || internalState.audioState === 'preparing') && internalState.wakeWordEnabled) {
+      setActivityPhase('listening', 'Listening');
+    } else {
+      setActivityPhase('inactive', 'Idle');
+    }
+  } else {
+    setActivityPhase('inactive', 'Idle');
   }
 }

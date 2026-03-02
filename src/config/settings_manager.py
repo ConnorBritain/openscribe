@@ -9,6 +9,7 @@ import os
 from typing import Dict, Any
 
 from src.config import config
+from src import settings_contract
 
 class SettingsManager:
     """Manages user settings persistence."""
@@ -26,17 +27,36 @@ class SettingsManager:
     
     def _load_default_settings(self) -> Dict[str, Any]:
         """Load default settings from config."""
-        return {
-            "selectedAsrModel": config.DEFAULT_ASR_MODEL,
-            "programActive": True,
-            "wakeWords": config.WAKE_WORDS,
-            "wakeWordEnabled": True,
-            "filterFillerWords": True,  # New setting for filler word filtering
-            "fillerWords": ["um", "uh", "ah", "er", "hmm", "mm", "mhm"],  # Default filler words
-            "autoStopOnSilence": True,  # Automatically stop dictation after sustained silence
-            "useMedGemmaPostProcessing": False,  # Optional LLM post-processing for MedASR
-            "secondaryAsrModel": None,  # Secondary model for quick re-transcribe hotkey
-        }
+        defaults = dict(settings_contract.PYTHON_DEFAULTS)
+        defaults["selectedAsrModel"] = str(
+            defaults.get("selectedAsrModel") or config.DEFAULT_ASR_MODEL
+        )
+        defaults["programActive"] = bool(defaults.get("programActive", True))
+        wake_words_default = defaults.get("wakeWords")
+        defaults["wakeWords"] = wake_words_default if isinstance(wake_words_default, dict) else config.WAKE_WORDS
+        defaults["wakeWordEnabled"] = bool(defaults.get("wakeWordEnabled", True))
+        defaults["filterFillerWords"] = bool(defaults.get("filterFillerWords", True))
+        filler_words_default = defaults.get("fillerWords")
+        if not isinstance(filler_words_default, list):
+            filler_words_default = ["um", "uh", "ah", "er", "hmm", "mm", "mhm"]
+        defaults["fillerWords"] = list(filler_words_default)
+        defaults["autoStopOnSilence"] = bool(defaults.get("autoStopOnSilence", True))
+        defaults["useMedGemmaPostProcessing"] = bool(
+            defaults.get("useMedGemmaPostProcessing", False)
+        )
+        defaults["secondaryAsrModel"] = defaults.get("secondaryAsrModel")
+        defaults["medicationAutoLearnEnabled"] = bool(
+            defaults.get("medicationAutoLearnEnabled", True)
+        )
+        defaults["selectedMicrophoneId"] = str(defaults.get("selectedMicrophoneId", "default"))
+        defaults["transcribeShortcut"] = str(defaults.get("transcribeShortcut", "Option+Space"))
+        defaults["stopTranscribingShortcut"] = str(
+            defaults.get("stopTranscribingShortcut", "Cmd+Shift+S")
+        )
+        defaults["retranscribeBackupShortcut"] = str(
+            defaults.get("retranscribeBackupShortcut", "Ctrl+Option+R")
+        )
+        return defaults
     
     def load_settings(self) -> Dict[str, Any]:
         """
@@ -104,6 +124,8 @@ class SettingsManager:
             self.settings["wakeWords"] = {"dictate": config.WAKE_WORDS.get("dictate", [])}
         if "wakeWordEnabled" not in self.settings:
             self.settings["wakeWordEnabled"] = True
+        if "medicationAutoLearnEnabled" not in self.settings:
+            self.settings["medicationAutoLearnEnabled"] = True
 
         return self.settings
     

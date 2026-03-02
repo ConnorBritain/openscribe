@@ -41,6 +41,7 @@ import time
 import os
 import wave
 import shutil
+import queue
 
 try:
     import mlx_whisper
@@ -176,7 +177,8 @@ except ImportError:
 
 # Import configuration constants
 from src.config import config
-from src.utils.utils import log_text  # Assuming a utils.py for logging
+from src.asr_runtime_manager import AsrRuntimeManager
+from src.utils.utils import log_event, log_text  # Assuming a utils.py for logging
 from src.vocabulary.vocabulary_manager import get_vocabulary_manager
 
 
@@ -207,6 +209,36 @@ class TranscriptionHandler:
         self.local_model_path_prepared = None
         self.parakeet_model = None
         self.voxtral_model = None
+        self._parakeet_loaded_model_id = None
+        self._medasr_pipeline = None
+
+        # Runtime model caches keep hot models in memory across dictation/retranscribe paths.
+        # This avoids repeated cold loads when users switch between a small set of models.
+        cache_limit_raw = os.getenv("CT_ASR_RUNTIME_CACHE_LIMIT", "2").strip()
+        try:
+            self._runtime_cache_limit = max(1, int(cache_limit_raw))
+        except ValueError:
+            self._runtime_cache_limit = 2
+        self._runtime_manager = AsrRuntimeManager(
+            cache_limit=self._runtime_cache_limit,
+            log_status=self._log_status,
+        )
+
+        # Keep primary transcription work in a bounded queue served by one long-lived worker
+        # instead of spawning an unbounded thread per request.
+        queue_size_raw = os.getenv("CT_PRIMARY_ASR_QUEUE_LIMIT", "2").strip()
+        try:
+            self._transcription_queue_size = max(1, int(queue_size_raw))
+        except ValueError:
+            self._transcription_queue_size = 2
+        self._transcription_queue = queue.Queue(maxsize=self._transcription_queue_size)
+        self._transcription_worker_stop = threading.Event()
+        self._transcription_worker = threading.Thread(
+            target=self._transcription_worker_loop,
+            daemon=True,
+            name="primary-asr-worker",
+        )
+        self._transcription_worker.start()
 
         # Use provided model, or saved settings, or config default (in that order)
         if selected_asr_model:
@@ -277,19 +309,17 @@ class TranscriptionHandler:
             if self.model_type == "parakeet" and PARAKEET_MLX_AVAILABLE:
                 try:
                     load_target = self.local_model_path_prepared or self.selected_asr_model
-                    self._log_status(f"Loading Parakeet model: {load_target}", "grey")
                     try:
-                        self.parakeet_model = parakeet_mlx.from_pretrained(load_target)
+                        self.parakeet_model = self._get_or_load_parakeet_model(load_target)
                     except Exception:
                         if load_target != self.selected_asr_model:
                             self._log_status(
                                 "Direct path load failed, retrying with repository id…",
                                 "orange",
                             )
-                            self.parakeet_model = parakeet_mlx.from_pretrained(self.selected_asr_model)
+                            self.parakeet_model = self._get_or_load_parakeet_model(self.selected_asr_model)
                         else:
                             raise
-                    self._log_status("Parakeet model loaded successfully", "grey")
                 except Exception as e:
                     self._log_status(f"Failed to load Parakeet model: {e}", "red")
                     raise RuntimeError(f"Failed to load Parakeet model: {e}") from e
@@ -345,9 +375,10 @@ class TranscriptionHandler:
         self.model_type = self._detect_model_type(self.selected_asr_model)
         self._log_status(f"Detected model type: {self.model_type} for {self.selected_asr_model}", "grey")
         
-        # Reset model-specific resources
+        # Reset active pointers (runtime caches are preserved to keep hot models loaded).
         self.parakeet_model = None
         self.voxtral_model = None
+        self._parakeet_loaded_model_id = None
         self.local_model_path_prepared = None
 
         if self.model_type == "voxtral" and not MLX_AUDIO_AVAILABLE:
@@ -380,7 +411,8 @@ class TranscriptionHandler:
                 f"Using bundled ASR model from: {bundled_path}", "grey"
             )
             self._ensure_hf_offline_env()
-            return
+            if self.model_type != "parakeet":
+                return
 
         try:
             ensured_path = None
@@ -389,20 +421,18 @@ class TranscriptionHandler:
 
             if self.model_type == "parakeet":
                 if PARAKEET_MLX_AVAILABLE:
-                    load_target = ensured_path or self.selected_asr_model
-                    self._log_status(f"Loading Parakeet model: {load_target}", "grey")
+                    load_target = ensured_path or self.local_model_path_prepared or self.selected_asr_model
                     try:
-                        self.parakeet_model = parakeet_mlx.from_pretrained(load_target)
+                        self.parakeet_model = self._get_or_load_parakeet_model(load_target)
                     except Exception:
                         if load_target != self.selected_asr_model:
                             self._log_status(
                                 "Direct path load failed, retrying with repository id…",
                                 "orange",
                             )
-                            self.parakeet_model = parakeet_mlx.from_pretrained(self.selected_asr_model)
+                            self.parakeet_model = self._get_or_load_parakeet_model(self.selected_asr_model)
                         else:
                             raise
-                    self._log_status("Parakeet model loaded successfully", "grey")
                     # Track the prepared path (repo id if direct)
                     self.local_model_path_prepared = load_target
                 else:
@@ -550,6 +580,102 @@ class TranscriptionHandler:
             print(f"TranscriptionHandler Status: {message}")
         if self.on_status_update:
             self.on_status_update(message, color)
+
+    def _transcription_worker_loop(self) -> None:
+        """Serial background worker for primary ASR requests."""
+        while True:
+            if self._transcription_worker_stop.is_set() and self._transcription_queue.empty():
+                break
+            try:
+                item = self._transcription_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+
+            try:
+                if item is None:
+                    break
+                audio_data, prompt = item
+                self._transcribe_thread_worker(audio_data, prompt)
+            finally:
+                self._transcription_queue.task_done()
+
+    def shutdown(self) -> None:
+        """Stop background worker threads owned by this handler."""
+        if not hasattr(self, "_transcription_worker_stop"):
+            return
+
+        self._transcription_worker_stop.set()
+        try:
+            self._transcription_queue.put_nowait(None)
+        except queue.Full:
+            pass
+        worker = getattr(self, "_transcription_worker", None)
+        if worker and worker.is_alive():
+            worker.join(timeout=2.0)
+
+    def __del__(self):
+        try:
+            self.shutdown()
+        except Exception:
+            pass
+
+    def _get_or_load_medasr_pipeline(self, model_path: str):
+        """Get MedASR pipeline from cache or create it once."""
+        cache_key = str(model_path or self.selected_asr_model or "google/medasr")
+        self._log_status(f"Preparing MedASR pipeline: {cache_key}", "grey")
+        pipeline, from_cache = self._runtime_manager.get_or_create(
+            "medasr",
+            cache_key,
+            lambda: hf_pipeline(
+                "automatic-speech-recognition",
+                model=cache_key,
+            ),
+        )
+        self._medasr_pipeline = pipeline
+        if from_cache:
+            self._log_status(f"Reusing warm MedASR pipeline: {cache_key}", "grey")
+        else:
+            self._log_status("MedASR pipeline loaded successfully", "grey")
+        return pipeline
+
+    def _get_or_load_parakeet_model(self, load_target: str):
+        """Get Parakeet model from cache or load it once."""
+        if not PARAKEET_MLX_AVAILABLE:
+            raise RuntimeError("Parakeet library not available")
+
+        cache_key = str(load_target or self.selected_asr_model)
+        self._log_status(f"Preparing Parakeet model: {cache_key}", "grey")
+        model, from_cache = self._runtime_manager.get_or_create(
+            "parakeet",
+            cache_key,
+            lambda: parakeet_mlx.from_pretrained(cache_key),
+        )
+        self.parakeet_model = model
+        self._parakeet_loaded_model_id = cache_key
+        if from_cache:
+            self._log_status(f"Reusing warm Parakeet model: {cache_key}", "grey")
+        else:
+            self._log_status(f"Parakeet model loaded successfully: {cache_key}", "grey")
+        return model
+
+    def _get_or_load_voxtral_model(self, model_path: str):
+        """Get Voxtral model from cache or load it once."""
+        if not MLX_AUDIO_AVAILABLE:
+            raise RuntimeError("mlx-audio library not available")
+
+        cache_key = str(model_path or self.selected_asr_model)
+        self._log_status(f"Preparing Voxtral model: {cache_key}", "grey")
+        model, from_cache = self._runtime_manager.get_or_create(
+            "voxtral",
+            cache_key,
+            lambda: mlx_audio_generate.load_model(cache_key),
+        )
+        self.voxtral_model = model
+        if from_cache:
+            self._log_status(f"Reusing warm Voxtral model: {cache_key}", "grey")
+        else:
+            self._log_status(f"Voxtral model loaded successfully: {cache_key}", "grey")
+        return model
 
     def _prepare_local_model_copy(self, hf_repo_id: str, *, local_files_only: bool = False) -> str:
         """Ensure a local model copy exists under models/, migrating cache if needed."""
@@ -826,7 +952,7 @@ class TranscriptionHandler:
         self, audio_data, prompt: str = config.DEFAULT_WHISPER_PROMPT
     ):
         """
-        Transcribes the given audio data in a separate thread.
+        Queue audio for transcription on the long-lived primary ASR worker.
 
         Args:
             audio_data: Numpy array containing the audio samples.
@@ -842,13 +968,31 @@ class TranscriptionHandler:
                 self.on_transcription_complete("", 0.0)  # Return empty result
             return
 
-        # Run the transcription process in a background thread
-        thread = threading.Thread(
-            target=self._transcribe_thread_worker,
-            args=(audio_data, prompt),
-            daemon=True,
-        )
-        thread.start()
+        if not hasattr(self, "_transcription_queue"):
+            # Safety fallback for tests that bypass __init__.
+            thread = threading.Thread(
+                target=self._transcribe_thread_worker,
+                args=(audio_data, prompt),
+                daemon=True,
+            )
+            thread.start()
+            return
+
+        try:
+            self._transcription_queue.put_nowait((audio_data, prompt))
+            queued_now = self._transcription_queue.qsize()
+            if queued_now > 1:
+                self._log_status(
+                    f"Primary ASR queue depth: {queued_now}/{self._transcription_queue_size}",
+                    "grey",
+                )
+        except queue.Full:
+            self._log_status(
+                "Primary ASR queue is full; dropping transcription request to preserve responsiveness.",
+                "orange",
+            )
+            if self.on_transcription_complete:
+                self.on_transcription_complete("", 0.0)
 
     def _transcribe_thread_worker(self, audio_data, prompt: str):
         """Worker function for the transcription thread."""
@@ -863,7 +1007,13 @@ class TranscriptionHandler:
                 self._log_status("Transcription mocked - no ASR libraries available (CI environment)", "orange")
                 raw_text = "[MOCK TRANSCRIPTION] Test transcription result"
                 transcription_time = 0.1  # Mock fast transcription
-                log_text("TRANSCRIBED", f"[Time: {transcription_time:.2f} seconds] {raw_text}")
+                log_event(
+                    "TRANSCRIBED",
+                    "transcription_complete",
+                    duration_seconds=round(transcription_time, 2),
+                    transcript=raw_text,
+                    model=self.selected_asr_model,
+                )
                 if self.on_transcription_complete:
                     self.on_transcription_complete(raw_text, transcription_time)
                 return
@@ -908,13 +1058,12 @@ class TranscriptionHandler:
                     self._log_status(error_msg, "red")
                     raise RuntimeError(error_msg)
 
-                if self.voxtral_model is None:
-                    model_target = self.local_model_path_prepared or self.selected_asr_model
-                    try:
-                        self.voxtral_model = mlx_audio_generate.load_model(model_target)
-                    except Exception as model_err:
-                        self._log_status(f"Failed to load Voxtral model: {model_err}", "red")
-                        raise
+                model_target = self.local_model_path_prepared or self.selected_asr_model
+                try:
+                    self.voxtral_model = self._get_or_load_voxtral_model(model_target)
+                except Exception as model_err:
+                    self._log_status(f"Failed to load Voxtral model: {model_err}", "red")
+                    raise
 
                 generation_stream = getattr(mlx_audio_generate, "generation_stream", False)
                 result = self.voxtral_model.generate(
@@ -934,18 +1083,13 @@ class TranscriptionHandler:
                 
                 try:
                     # Load pipeline (lazy load and cache)
-                    if not hasattr(self, '_medasr_pipeline') or self._medasr_pipeline is None:
-                        model_path = self.local_model_path_prepared or self.selected_asr_model
-                        self._log_status(f"Loading MedASR pipeline from: {model_path}", "grey")
-                        
-                        self._medasr_pipeline = hf_pipeline(
-                            "automatic-speech-recognition",
-                            model=model_path
-                        )
-                        self._log_status("MedASR pipeline loaded successfully", "grey")
+                    # MedASR uses Wav2Vec2/CTC architecture which has incomplete MPS kernel
+                    # support in current PyTorch — keep it on CPU where it's stable.
+                    model_path = self.local_model_path_prepared or self.selected_asr_model
+                    medasr_pipeline = self._get_or_load_medasr_pipeline(model_path)
                     
                     # Run transcription
-                    result = self._medasr_pipeline(
+                    result = medasr_pipeline(
                         filename,
                         chunk_length_s=20,
                         stride_length_s=2
@@ -966,27 +1110,43 @@ class TranscriptionHandler:
             elif self.model_type == "parakeet":
                 self._log_status(f"Using Parakeet-MLX for transcription with model: {self.selected_asr_model}", "blue")
                 
-                if not PARAKEET_MLX_AVAILABLE or self.parakeet_model is None:
+                if not PARAKEET_MLX_AVAILABLE:
                     # Provide helpful error message instead of mock transcription
                     error_msg = "Parakeet transcription failed"
-                    if not PARAKEET_MLX_AVAILABLE:
-                        error_msg += " - parakeet_mlx library not installed. Please run: pip install parakeet-mlx"
-                    else:
-                        error_msg += " - model failed to load"
-                    
+                    error_msg += " - parakeet_mlx library not installed. Please run: pip install parakeet-mlx"
                     self._log_status(error_msg, "red")
                     raise RuntimeError(error_msg)
+                if self.parakeet_model is None:
+                    load_target = self.local_model_path_prepared or self.selected_asr_model
+                    try:
+                        self.parakeet_model = self._get_or_load_parakeet_model(load_target)
+                    except Exception as parakeet_load_err:
+                        if load_target != self.selected_asr_model:
+                            self._log_status(
+                                "Parakeet path load failed, retrying with repository id…",
+                                "orange",
+                            )
+                            try:
+                                self.parakeet_model = self._get_or_load_parakeet_model(self.selected_asr_model)
+                            except Exception as retry_err:
+                                error_msg = f"Parakeet transcription failed - model load failed: {retry_err}"
+                                self._log_status(error_msg, "red")
+                                raise RuntimeError(error_msg) from retry_err
+                        else:
+                            error_msg = f"Parakeet transcription failed - model load failed: {parakeet_load_err}"
+                            self._log_status(error_msg, "red")
+                            raise RuntimeError(error_msg) from parakeet_load_err
+
+                # Use parakeet_mlx for transcription
+                result = self.parakeet_model.transcribe(filename)
+                # Extract text from AlignedResult - use the direct text property
+                if hasattr(result, 'text'):
+                    raw_text = result.text.strip()
+                elif hasattr(result, 'tokens') and result.tokens:
+                    # Fallback: concatenate tokens without spaces (character-level tokens)
+                    raw_text = ''.join([token.text for token in result.tokens if hasattr(token, 'text')]).strip()
                 else:
-                    # Use parakeet_mlx for transcription
-                    result = self.parakeet_model.transcribe(filename)
-                    # Extract text from AlignedResult - use the direct text property
-                    if hasattr(result, 'text'):
-                        raw_text = result.text.strip()
-                    elif hasattr(result, 'tokens') and result.tokens:
-                        # Fallback: concatenate tokens without spaces (character-level tokens)
-                        raw_text = ''.join([token.text for token in result.tokens if hasattr(token, 'text')]).strip()
-                    else:
-                        raw_text = str(result).strip()
+                    raw_text = str(result).strip()
                     
             else:  # whisper model
                 if self._whisper_backend == "transformers":
@@ -1063,7 +1223,11 @@ class TranscriptionHandler:
                 
                 if corrections:
                     self._log_status(f"Applied {len(corrections)} vocabulary corrections", "blue")
-                    log_text("VOCAB_CORRECTIONS", f"Applied corrections: {corrections}")
+                    log_event(
+                        "VOCAB_CORRECTIONS",
+                        "applied_vocabulary_corrections",
+                        correction_count=len(corrections),
+                    )
                     raw_text = corrected_text
                     
             except Exception as e:
@@ -1071,8 +1235,12 @@ class TranscriptionHandler:
                 # Continue with original text if vocabulary fails
                 log_text("VOCAB_ERROR", f"Vocabulary correction failed: {e}")
 
-            log_text(
-                "TRANSCRIBED", f"[Time: {transcription_time:.2f} seconds] {raw_text}"
+            log_event(
+                "TRANSCRIBED",
+                "transcription_complete",
+                duration_seconds=round(transcription_time, 2),
+                transcript=raw_text,
+                model=self.selected_asr_model,
             )
             self._log_status(
                 f"Transcription successful ({transcription_time:.2f}s).", "green"
@@ -1249,15 +1417,11 @@ class TranscriptionHandler:
             raise RuntimeError("transformers library not available for MedASR")
         
         # Use existing cached pipeline or create new one
-        if not hasattr(self, '_medasr_pipeline') or self._medasr_pipeline is None:
-            self._log_status(f"Loading MedASR pipeline from: {model_path}", "grey")
-            self._medasr_pipeline = hf_pipeline(
-                "automatic-speech-recognition",
-                model=model_path
-            )
-            self._log_status("MedASR pipeline loaded successfully", "grey")
+        # MedASR uses Wav2Vec2/CTC architecture which has incomplete MPS kernel
+        # support in current PyTorch — keep it on CPU where it's stable.
+        medasr_pipeline = self._get_or_load_medasr_pipeline(model_path)
         
-        result = self._medasr_pipeline(
+        result = medasr_pipeline(
             audio_path,
             chunk_length_s=20,
             stride_length_s=2
@@ -1278,15 +1442,23 @@ class TranscriptionHandler:
         
         load_target = model_path or "mlx-community/parakeet-tdt-0.6b-v2"
         
-        # Check if we need to load a different model than currently cached
-        current_loaded = getattr(self, '_parakeet_loaded_model_id', None)
-        if self.parakeet_model is None or current_loaded != load_target:
-            self._log_status(f"Loading Parakeet model: {load_target}", "grey")
-            try:
-                self.parakeet_model = parakeet_mlx.from_pretrained(load_target)
-                self._parakeet_loaded_model_id = load_target
-                self._log_status(f"Parakeet model loaded successfully: {load_target}", "grey")
-            except Exception as e:
+        # Get model from runtime cache (or load once).
+        try:
+            self.parakeet_model = self._get_or_load_parakeet_model(load_target)
+        except Exception as e:
+            if load_target != self.selected_asr_model:
+                self._log_status(
+                    "Parakeet path load failed, retrying with repository id…",
+                    "orange",
+                )
+                try:
+                    self.parakeet_model = self._get_or_load_parakeet_model(self.selected_asr_model)
+                except Exception as retry_err:
+                    self._log_status(f"Failed to load Parakeet model: {retry_err}", "red")
+                    raise RuntimeError(
+                        f"Failed to load Parakeet model '{self.selected_asr_model}': {retry_err}"
+                    ) from retry_err
+            else:
                 self._log_status(f"Failed to load Parakeet model: {e}", "red")
                 raise RuntimeError(f"Failed to load Parakeet model '{load_target}': {e}") from e
         
@@ -1304,9 +1476,7 @@ class TranscriptionHandler:
         if not MLX_AUDIO_AVAILABLE:
             raise RuntimeError("mlx-audio library not available")
         
-        if self.voxtral_model is None:
-            self._log_status(f"Loading Voxtral model: {model_path}", "grey")
-            self.voxtral_model = mlx_audio_generate.load_model(model_path)
+        self.voxtral_model = self._get_or_load_voxtral_model(model_path)
         
         generation_stream = getattr(mlx_audio_generate, "generation_stream", False)
         result = self.voxtral_model.generate(
@@ -1335,17 +1505,16 @@ class TranscriptionHandler:
             raise RuntimeError("Transformers/Torch not available for Whisper fallback")
         device = "mps" if hasattr(torch.backends, "mps") and torch.backends.mps.is_available() else "cpu"
         torch_dtype = torch.float16 if device == "mps" else torch.float32
-        # Cache pipelines per model
-        if not hasattr(self, "_hf_pipes"):
-            self._hf_pipes = {}
-        if model_id not in self._hf_pipes:
+        cache_key = f"{model_id}|{device}|{torch_dtype}"
+
+        def _create_pipe():
             processor = AutoProcessor.from_pretrained(model_id)
             model = AutoModelForSpeechSeq2Seq.from_pretrained(
                 model_id, torch_dtype=torch_dtype, low_cpu_mem_usage=True
             )
             if device != "cpu":
                 model.to(device)
-            pipe = hf_pipeline(
+            return hf_pipeline(
                 "automatic-speech-recognition",
                 model=model,
                 tokenizer=processor.tokenizer,
@@ -1353,9 +1522,14 @@ class TranscriptionHandler:
                 torch_dtype=torch_dtype,
                 device=0 if device != "cpu" else -1,
             )
-            self._hf_pipes[model_id] = pipe
-        else:
-            pipe = self._hf_pipes[model_id]
+
+        pipe, from_cache = self._runtime_manager.get_or_create(
+            "whisper_transformers",
+            cache_key,
+            _create_pipe,
+        )
+        if from_cache:
+            self._log_status(f"Reusing warm Transformers-Whisper pipeline: {model_id}", "grey")
         # Whisper models typically cap target length at 448 tokens (max_target_positions)
         # Keep a safety margin to account for special/prompt tokens
         safe_max_new_tokens = 440

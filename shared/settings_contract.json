@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "keys": [
+    "selectedAsrModel",
+    "programActive",
+    "wakeWords",
+    "wakeWordEnabled",
+    "filterFillerWords",
+    "fillerWords",
+    "autoStopOnSilence",
+    "useMedGemmaPostProcessing",
+    "secondaryAsrModel",
+    "medicationAutoLearnEnabled",
+    "uiMode",
+    "selectedMicrophoneId",
+    "transcribeShortcut",
+    "stopTranscribingShortcut",
+    "retranscribeBackupShortcut"
+  ],
+  "electronDefaults": {
+    "wakeWords": {
+      "dictate": [
+        "note"
+      ]
+    },
+    "wakeWordEnabled": true,
+    "uiMode": "classic",
+    "selectedAsrModel": "",
+    "filterFillerWords": true,
+    "fillerWords": [
+      "um",
+      "uh",
+      "ah",
+      "er",
+      "hmm",
+      "mm",
+      "mhm"
+    ],
+    "autoStopOnSilence": true,
+    "selectedMicrophoneId": "default",
+    "transcribeShortcut": "Option+Space",
+    "stopTranscribingShortcut": "Cmd+Shift+S",
+    "retranscribeBackupShortcut": "Ctrl+Option+R",
+    "secondaryAsrModel": null,
+    "medicationAutoLearnEnabled": true
+  },
+  "pythonDefaults": {
+    "programActive": true,
+    "wakeWords": {
+      "dictate": [
+        "note",
+        "dictation",
+        "dictate"
+      ]
+    },
+    "wakeWordEnabled": true,
+    "filterFillerWords": true,
+    "fillerWords": [
+      "um",
+      "uh",
+      "ah",
+      "er",
+      "hmm",
+      "mm",
+      "mhm"
+    ],
+    "autoStopOnSilence": true,
+    "useMedGemmaPostProcessing": false,
+    "secondaryAsrModel": null,
+    "medicationAutoLearnEnabled": true,
+    "selectedMicrophoneId": "default",
+    "transcribeShortcut": "Option+Space",
+    "stopTranscribingShortcut": "Cmd+Shift+S",
+    "retranscribeBackupShortcut": "Ctrl+Option+R"
+  },
+  "pythonConfigKeys": [
+    "wakeWords",
+    "filterFillerWords",
+    "fillerWords",
+    "autoStopOnSilence",
+    "wakeWordEnabled",
+    "medicationAutoLearnEnabled",
+    "selectedMicrophoneId",
+    "transcribeShortcut",
+    "stopTranscribingShortcut",
+    "retranscribeBackupShortcut",
+    "selectedAsrModel",
+    "secondaryAsrModel"
+  ],
+  "pythonConfigOptionalStringKeys": [
+    "selectedAsrModel",
+    "secondaryAsrModel"
+  ]
+}

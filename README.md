@@ -141,6 +141,8 @@ Default hotkeys (macOS):
 - `Cmd+Shift+R`: Restart application
 - `Cmd+Shift+H`: Show hotkeys
 - `Cmd+Shift+M`: Toggle mini mode
+- `Ctrl+Option+R`: Quick secondary re-transcribe + paste (recommended)
+- `Cmd+Shift+X` (or `Cmd+Option+X`): Quick secondary re-transcribe + paste
 
 ### Wake Words
 

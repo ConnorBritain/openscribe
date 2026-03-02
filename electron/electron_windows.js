@@ -1,29 +1,118 @@
 // electron_windows.js
 // Handles main window and settings window management
 
-const { BrowserWindow, ipcMain } = require('electron');
+const { BrowserWindow, ipcMain, screen } = require('electron');
 const path = require('path');
 const { startPythonBackend } = require('./electron_python');
+const { store } = require('./electron_app_init');
+const handyUiConstants = require('../frontend/shared/handy_ui_constants.json');
 
 let mainWindow = null;
 // No separate proofing window in note-only mode
 
+const CLASSIC_WINDOW_BOUNDS = {
+  width: 600,
+  height: 120,
+  xOffset: 20,
+  yOffset: 20
+};
+
+const HANDY_WINDOW_BOUNDS = {
+  width: Number.isFinite(Number(handyUiConstants.width)) ? Number(handyUiConstants.width) : 172,
+  height: Number.isFinite(Number(handyUiConstants.height)) ? Number(handyUiConstants.height) : 36,
+  bottomOffset: Number.isFinite(Number(handyUiConstants.bottomOffset)) ? Number(handyUiConstants.bottomOffset) : 28
+};
+
+let currentUiMode = 'classic';
+
+function normalizeUiMode(mode) {
+  return mode === 'handy' ? 'handy' : 'classic';
+}
+
+function getDisplayForBounds(bounds = null) {
+  try {
+    if (bounds) {
+      return screen.getDisplayMatching(bounds) || screen.getPrimaryDisplay();
+    }
+    return screen.getDisplayNearestPoint(screen.getCursorScreenPoint()) || screen.getPrimaryDisplay();
+  } catch (_error) {
+    return screen.getPrimaryDisplay();
+  }
+}
+
+function getBoundsForMode(mode, referenceBounds = null) {
+  const normalizedMode = normalizeUiMode(mode);
+  const display = getDisplayForBounds(referenceBounds);
+  const workArea = display.workArea;
+
+  if (normalizedMode === 'handy') {
+    const width = Math.min(HANDY_WINDOW_BOUNDS.width, workArea.width);
+    const height = Math.min(HANDY_WINDOW_BOUNDS.height, workArea.height);
+    return {
+      width,
+      height,
+      x: Math.round(workArea.x + (workArea.width - width) / 2),
+      y: Math.round(workArea.y + workArea.height - height - HANDY_WINDOW_BOUNDS.bottomOffset)
+    };
+  }
+
+  const width = Math.min(CLASSIC_WINDOW_BOUNDS.width, workArea.width);
+  const height = Math.min(CLASSIC_WINDOW_BOUNDS.height, workArea.height);
+  return {
+    width,
+    height,
+    x: workArea.x + CLASSIC_WINDOW_BOUNDS.xOffset,
+    y: workArea.y + CLASSIC_WINDOW_BOUNDS.yOffset
+  };
+}
+
+function getCurrentUiMode() {
+  return currentUiMode;
+}
+
+function applyMainWindowUiMode(mode) {
+  const normalizedMode = normalizeUiMode(mode);
+  currentUiMode = normalizedMode;
+
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return normalizedMode;
+  }
+
+  const nextBounds = getBoundsForMode(normalizedMode, mainWindow.getBounds());
+  mainWindow.setResizable(normalizedMode !== 'handy');
+  mainWindow.setMinimumSize(
+    normalizedMode === 'handy' ? HANDY_WINDOW_BOUNDS.width : 420,
+    normalizedMode === 'handy' ? HANDY_WINDOW_BOUNDS.height : 90
+  );
+  mainWindow.setBackgroundColor(normalizedMode === 'handy' ? '#00000000' : '#0c111a');
+  if (typeof mainWindow.setHasShadow === 'function') {
+    mainWindow.setHasShadow(normalizedMode !== 'handy');
+  }
+  mainWindow.setBounds(nextBounds, true);
+
+  if (mainWindow.webContents && !mainWindow.webContents.isDestroyed()) {
+    mainWindow.webContents.send('ui-mode-updated', { uiMode: normalizedMode });
+  }
+
+  return normalizedMode;
+}
+
 function createWindow() {
-  // Calculate position for main window (top-right corner)
-  const mainWindowWidth = 600;
-  const mainWindowHeight = 120;
-  const mainWindowX = 20; // 20px from left edge
-  const mainWindowY = 20; // 20px from top
+  currentUiMode = normalizeUiMode(store.get('uiMode', 'classic'));
+  const initialBounds = getBoundsForMode(currentUiMode);
 
   mainWindow = new BrowserWindow({
-    width: mainWindowWidth,
-    height: mainWindowHeight,
-    x: mainWindowX,
-    y: mainWindowY,
-    minHeight: 90,
+    width: initialBounds.width,
+    height: initialBounds.height,
+    x: initialBounds.x,
+    y: initialBounds.y,
+    minWidth: currentUiMode === 'handy' ? HANDY_WINDOW_BOUNDS.width : 420,
+    minHeight: currentUiMode === 'handy' ? HANDY_WINDOW_BOUNDS.height : 90,
     frame: false,
-    transparent: false, // Temporarily disable transparency for debugging
-    resizable: true,
+    transparent: true,
+    backgroundColor: currentUiMode === 'handy' ? '#00000000' : '#0c111a',
+    hasShadow: currentUiMode !== 'handy',
+    resizable: currentUiMode !== 'handy',
     icon: path.join(__dirname, '../assets/app-icon.png'),
     webPreferences: {
       preload: path.join(__dirname, '../frontend/main/preload.js'),
@@ -49,10 +138,14 @@ function createWindow() {
   mainWindow.once('ready-to-show', () => {
     console.log('[DEBUG] ready-to-show event fired');
     mainWindow.show();
+    applyMainWindowUiMode(currentUiMode);
   });
 
   // IPC handler for resizing the main window from the renderer
   ipcMain.on('resize-window', (event, { height }) => {
+    if (currentUiMode === 'handy') {
+      return;
+    }
     if (mainWindow && height) {
       const currentBounds = mainWindow.getBounds();
       mainWindow.setBounds({
@@ -158,4 +251,11 @@ function createHistoryWindow() {
   return historyWindow;
 }
 
-module.exports = { createWindow, getMainWindow, createSettingsWindow, createHistoryWindow };
+module.exports = {
+  createWindow,
+  getMainWindow,
+  createSettingsWindow,
+  createHistoryWindow,
+  applyMainWindowUiMode,
+  getCurrentUiMode
+};
