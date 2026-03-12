@@ -14,6 +14,15 @@ const ipcContract = require('./ipc_contract');
 const { buildPythonConfigFromStore } = require('./python_config_payload');
 const { ELECTRON_DEFAULTS } = require('./settings_contract');
 
+function maskApiKey(key) {
+  if (!key || typeof key !== 'string') return '';
+  const trimmed = key.trim();
+  if (trimmed.length <= 8) return '****';
+  const prefix = trimmed.slice(0, 3);
+  const suffix = trimmed.slice(-4);
+  return `${prefix}****${suffix}`;
+}
+
 function initializeIpcHandlers() {
   // Handle tray icon state updates from renderer
   ipcMain.on('set-tray-state', (_event, state) => {
@@ -131,8 +140,8 @@ function initializeIpcHandlers() {
       if (typeof settings.openaiApiKey === 'string') {
         store.set('openaiApiKey', settings.openaiApiKey);
       }
-      if (typeof settings.googleCloudKeyPath === 'string') {
-        store.set('googleCloudKeyPath', settings.googleCloudKeyPath);
+      if (typeof settings.googleApiKey === 'string') {
+        store.set('googleApiKey', settings.googleApiKey);
       }
       if (settings.fileTranscriptionDefaults && typeof settings.fileTranscriptionDefaults === 'object') {
         store.set('fileTranscriptionDefaults', settings.fileTranscriptionDefaults);
@@ -178,8 +187,10 @@ function initializeIpcHandlers() {
       stopTranscribingShortcut: store.get('stopTranscribingShortcut', defaults.stopTranscribingShortcut),
       retranscribeBackupShortcut: store.get('retranscribeBackupShortcut', defaults.retranscribeBackupShortcut),
       availableModels: getActualAvailableLLMs() || [],
-      openaiApiKey: store.get('openaiApiKey', defaults.openaiApiKey || ''),
-      googleCloudKeyPath: store.get('googleCloudKeyPath', defaults.googleCloudKeyPath || ''),
+      openaiApiKeyMasked: maskApiKey(store.get('openaiApiKey', '')),
+      openaiApiKeyConfigured: !!store.get('openaiApiKey', ''),
+      googleApiKeyConfigured: !!store.get('googleApiKey', ''),
+      googleApiKeyMasked: maskApiKey(store.get('googleApiKey', '')),
       fileTranscriptionDefaults: store.get('fileTranscriptionDefaults', defaults.fileTranscriptionDefaults || {})
     };
     console.log('[IPC] load-settings: returning', settings);
@@ -433,6 +444,45 @@ function initializeIpcHandlers() {
     }
   });
 
+  // --- API Key Management Handlers ---
+
+  ipcMain.handle('apikey:status', async () => {
+    const openaiKey = store.get('openaiApiKey', '');
+    const googleKey = store.get('googleApiKey', '');
+    return {
+      openai: {
+        configured: !!openaiKey,
+        masked: maskApiKey(openaiKey)
+      },
+      google: {
+        configured: !!googleKey,
+        masked: maskApiKey(googleKey)
+      }
+    };
+  });
+
+  ipcMain.handle('apikey:save', async (_event, { provider, value }) => {
+    if (provider === 'openai' && typeof value === 'string') {
+      store.set('openaiApiKey', value.trim());
+      return { success: true, masked: maskApiKey(value.trim()) };
+    } else if (provider === 'google' && typeof value === 'string') {
+      store.set('googleApiKey', value.trim());
+      return { success: true, masked: maskApiKey(value.trim()) };
+    }
+    return { success: false, error: 'Unknown provider.' };
+  });
+
+  ipcMain.handle('apikey:delete', async (_event, { provider }) => {
+    if (provider === 'openai') {
+      store.delete('openaiApiKey');
+      return { success: true };
+    } else if (provider === 'google') {
+      store.delete('googleApiKey');
+      return { success: true };
+    }
+    return { success: false, error: 'Unknown provider.' };
+  });
+
   // --- File Transcription Handlers ---
 
   ipcMain.handle('file:pick', async () => {
@@ -471,7 +521,7 @@ function initializeIpcHandlers() {
     if (modelId.startsWith('openai:')) {
       apiKey = store.get('openaiApiKey', '') || '';
     } else if (modelId.startsWith('google:')) {
-      apiKey = store.get('googleCloudKeyPath', '') || '';
+      apiKey = store.get('googleApiKey', '') || '';
     }
 
     const payload = {

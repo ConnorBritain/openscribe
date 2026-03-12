@@ -1,7 +1,7 @@
 // main.js (modular entry point)
 const { app } = require('electron');
 const path = require('path');
-const { createWindow, getMainWindow, createSettingsWindow, createHistoryWindow, createFileTranscribeWindow } = require('./electron/electron_windows');
+const { createWindow, getMainWindow, createSettingsWindow, createHistoryWindow, createFileTranscribeWindow, navigateToHome, navigateToDictation, navigateToFileTranscribe } = require('./electron/electron_windows');
 const { createTrayIcon } = require('./electron/electron_tray');
 const { initializeIpcHandlers } = require('./electron/electron_ipc');
 const { setupAppLifecycle } = require('./electron/electron_lifecycle');
@@ -23,7 +23,10 @@ function main() {
       createSettingsWindow,
       createHistoryWindow,
       createFileTranscribeWindow,
-      getMainWindow
+      getMainWindow,
+      navigateToHome,
+      navigateToDictation,
+      navigateToFileTranscribe
     });
 
     createWindow();

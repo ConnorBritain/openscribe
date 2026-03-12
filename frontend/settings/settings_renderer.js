@@ -552,13 +552,8 @@ async function loadAndPopulateSettings() {
       useMedgemmaToggle.checked = settings.useMedGemmaPostProcessing === true;
     }
 
-    // Load Cloud API settings
-    if (openaiApiKeyInput && settings.openaiApiKey) {
-      openaiApiKeyInput.value = settings.openaiApiKey;
-    }
-    if (googleCloudKeyInput && settings.googleCloudKeyPath) {
-      googleCloudKeyInput.value = settings.googleCloudKeyPath;
-    }
+    // Load Cloud API key status (masked display)
+    refreshSettingsApiKeyStatus();
   } catch (error) {
     console.error('ERROR: Error loading settings:', error);
     if (wakeWordsStatus) {
@@ -1083,27 +1078,94 @@ if (medicationAutoLearnRunNowButton) {
   medicationAutoLearnRunNowButton.addEventListener('click', runMedicationAutoLearnNow);
 }
 
-// --- Cloud API Settings ---
-const openaiApiKeyInput = document.getElementById('openai-api-key-input');
-const googleCloudKeyInput = document.getElementById('google-cloud-key-input');
-const saveCloudApiButton = document.getElementById('save-cloudapi-button');
-const cloudApiStatus = document.getElementById('cloudapi-status');
+// --- Cloud API Settings (masked key management) ---
+const settingsOpenaiStatus = document.getElementById('settings-openai-status');
+const settingsOpenaiAdd = document.getElementById('settings-openai-add');
+const settingsOpenaiDelete = document.getElementById('settings-openai-delete');
+const settingsOpenaiEntry = document.getElementById('settings-openai-entry');
+const settingsOpenaiInput = document.getElementById('settings-openai-input');
+const settingsOpenaiSave = document.getElementById('settings-openai-save');
+const settingsOpenaiCancel = document.getElementById('settings-openai-cancel');
+const settingsGoogleStatus = document.getElementById('settings-google-status');
+const settingsGoogleAdd = document.getElementById('settings-google-add');
+const settingsGoogleDelete = document.getElementById('settings-google-delete');
+// cloudapi-status element available if needed for future feedback
 
-if (saveCloudApiButton) {
-  saveCloudApiButton.addEventListener('click', () => {
-    const openaiKey = openaiApiKeyInput ? openaiApiKeyInput.value.trim() : '';
-    const googleKeyPath = googleCloudKeyInput ? googleCloudKeyInput.value.trim() : '';
-
-    window.settingsAPI.saveSettings({
-      openaiApiKey: openaiKey,
-      googleCloudKeyPath: googleKeyPath
-    });
-
-    if (cloudApiStatus) {
-      cloudApiStatus.textContent = 'Cloud API settings saved!';
-      cloudApiStatus.style.color = 'green';
-      setTimeout(() => { cloudApiStatus.textContent = ''; }, 3000);
+async function refreshSettingsApiKeyStatus() {
+  try {
+    const status = await window.settingsAPI.getApiKeyStatus();
+    if (settingsOpenaiStatus) {
+      if (status.openai.configured) {
+        settingsOpenaiStatus.textContent = status.openai.masked;
+        settingsOpenaiStatus.style.color = '#4dd37a';
+        if (settingsOpenaiAdd) settingsOpenaiAdd.textContent = 'Change';
+        if (settingsOpenaiDelete) settingsOpenaiDelete.style.display = '';
+      } else {
+        settingsOpenaiStatus.textContent = 'Not configured';
+        settingsOpenaiStatus.style.color = '#888';
+        if (settingsOpenaiAdd) settingsOpenaiAdd.textContent = 'Add Key';
+        if (settingsOpenaiDelete) settingsOpenaiDelete.style.display = 'none';
+      }
     }
+    if (settingsGoogleStatus) {
+      if (status.google.configured) {
+        settingsGoogleStatus.textContent = status.google.masked;
+        settingsGoogleStatus.style.color = '#4dd37a';
+        if (settingsGoogleAdd) settingsGoogleAdd.textContent = 'Change';
+        if (settingsGoogleDelete) settingsGoogleDelete.style.display = '';
+      } else {
+        settingsGoogleStatus.textContent = 'Not configured';
+        settingsGoogleStatus.style.color = '#888';
+        if (settingsGoogleAdd) settingsGoogleAdd.textContent = 'Add Key';
+        if (settingsGoogleDelete) settingsGoogleDelete.style.display = 'none';
+      }
+    }
+  } catch (err) {
+    console.warn('Failed to load API key status:', err);
+  }
+}
+
+if (settingsOpenaiAdd) {
+  settingsOpenaiAdd.addEventListener('click', () => {
+    if (settingsOpenaiEntry) settingsOpenaiEntry.style.display = '';
+    if (settingsOpenaiInput) { settingsOpenaiInput.value = ''; settingsOpenaiInput.focus(); }
+  });
+}
+if (settingsOpenaiCancel) {
+  settingsOpenaiCancel.addEventListener('click', () => {
+    if (settingsOpenaiEntry) settingsOpenaiEntry.style.display = 'none';
+  });
+}
+if (settingsOpenaiSave) {
+  settingsOpenaiSave.addEventListener('click', async () => {
+    const val = settingsOpenaiInput ? settingsOpenaiInput.value.trim() : '';
+    if (!val) return;
+    await window.settingsAPI.saveApiKey('openai', val);
+    if (settingsOpenaiEntry) settingsOpenaiEntry.style.display = 'none';
+    refreshSettingsApiKeyStatus();
+  });
+}
+if (settingsOpenaiDelete) {
+  settingsOpenaiDelete.addEventListener('click', async () => {
+    await window.settingsAPI.deleteApiKey('openai');
+    refreshSettingsApiKeyStatus();
+  });
+}
+if (settingsGoogleAdd) {
+  settingsGoogleAdd.addEventListener('click', () => {
+    // Inline entry for Google API key (reuse the OpenAI pattern)
+    const input = prompt('Enter your Google AI API Key:');
+    if (input && input.trim()) {
+      window.settingsAPI.saveApiKey('google', input.trim()).then(() => {
+        refreshSettingsApiKeyStatus();
+      });
+    }
+  });
+}
+if (settingsGoogleDelete) {
+  settingsGoogleDelete.addEventListener('click', async () => {
+    await window.settingsAPI.deleteApiKey('google');
+    refreshSettingsApiKeyStatus();
   });
 }
 

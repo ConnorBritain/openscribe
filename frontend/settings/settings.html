@@ -587,7 +587,7 @@
 
     <div id="section-cloudapi" class="settings-section" style="display: none; padding-right: 30px; padding-bottom: 60px;">
         <h2>Cloud API Keys</h2>
-        <p style="color: #666; margin-bottom: 20px;">Configure API keys for cloud-based transcription backends. Keys are stored securely in the app's encrypted settings.</p>
+        <p style="color: #666; margin-bottom: 20px;">Configure API keys for cloud-based transcription backends. Keys are stored securely and cannot be retrieved after saving.</p>
 
         <div class="handy-card">
             <div class="handy-row" style="flex-direction: column; align-items: flex-start; gap: 8px;">
@@ -596,8 +596,19 @@
                     <button class="info-tip" type="button"
                         data-tip="Required for OpenAI Whisper and GPT-4o Transcribe. Get your key at platform.openai.com.">i</button>
                 </div>
-                <input type="password" id="openai-api-key-input" placeholder="sk-..."
-                    style="width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #d0d5dd; border-radius: 6px; font-size: 14px;">
+                <div style="display: flex; align-items: center; gap: 10px; width: 100%;">
+                    <span id="settings-openai-status" style="font-family: monospace; font-size: 14px; color: #888;">Not configured</span>
+                    <button id="settings-openai-add" class="settings-key-action">Add Key</button>
+                    <button id="settings-openai-delete" class="settings-key-action danger" style="display: none;">Remove</button>
+                </div>
+                <div id="settings-openai-entry" style="display: none; width: 100%;">
+                    <div style="display: flex; gap: 8px;">
+                        <input type="password" id="settings-openai-input" placeholder="sk-..."
+                            style="flex: 1; padding: 10px 12px; border: 1px solid #d0d5dd; border-radius: 6px; font-size: 14px; font-family: monospace;">
+                        <button id="settings-openai-save">Save</button>
+                        <button id="settings-openai-cancel">Cancel</button>
+                    </div>
+                </div>
                 <small class="inline-muted">Used for File Transcription with OpenAI models. Never sent to any server except OpenAI.</small>
             </div>
         </div>
@@ -605,19 +616,19 @@
         <div class="handy-card" style="margin-top: 16px;">
             <div class="handy-row" style="flex-direction: column; align-items: flex-start; gap: 8px;">
                 <div class="handy-row__label">
-                    <span>Google Cloud Key File</span>
+                    <span>Google AI API Key</span>
                     <button class="info-tip" type="button"
-                        data-tip="Path to a Google Cloud service account JSON key file. Required for Google Chirp 2 transcription with speaker diarization.">i</button>
+                        data-tip="API key from Google AI Studio (aistudio.google.com). Required for Google Chirp 2 transcription.">i</button>
                 </div>
-                <div style="display: flex; gap: 8px; width: 100%;">
-                    <input type="text" id="google-cloud-key-input" placeholder="/path/to/service-account.json"
-                        style="flex: 1; padding: 10px 12px; border: 1px solid #d0d5dd; border-radius: 6px; font-size: 14px;">
+                <div style="display: flex; align-items: center; gap: 10px; width: 100%;">
+                    <span id="settings-google-status" style="font-family: monospace; font-size: 14px; color: #888;">Not configured</span>
+                    <button id="settings-google-add" class="settings-key-action">Add Key</button>
+                    <button id="settings-google-delete" class="settings-key-action danger" style="display: none;">Remove</button>
                 </div>
-                <small class="inline-muted">Service account JSON file for Google Cloud Speech-to-Text v2.</small>
+                <small class="inline-muted">Get your API key at aistudio.google.com. Used for Chirp 2 transcription.</small>
             </div>
         </div>
 
-        <button id="save-cloudapi-button" style="margin-top: 18px;">Save Cloud API Settings</button>
         <p id="cloudapi-status" style="color: green; margin-top: 10px;"></p>
     </div>
 

@@ -22,6 +22,61 @@ body {
     overflow: hidden;
 }
 
+/* View navigation bar (top of dictation/transcribe pages) */
+.view-nav {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 14px;
+    background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    flex-shrink: 0;
+}
+
+.view-nav__back {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    background: none;
+    border: none;
+    color: #58a6ff;
+    font-size: 13px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+.view-nav__back:hover {
+    background: rgba(88, 166, 255, 0.1);
+}
+
+.view-nav__title {
+    flex: 1;
+    font-size: 13px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.view-nav__link {
+    background: none;
+    border: none;
+    color: rgba(255, 255, 255, 0.45);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+.view-nav__link:hover {
+    color: #58a6ff;
+    background: rgba(88, 166, 255, 0.1);
+}
+
+/* Hide view nav in handy mode */
+body.ui-mode-handy .view-nav {
+    display: none;
+}
+
 #proofing-stream-container {
     margin: 0 auto;
     width: 500px;

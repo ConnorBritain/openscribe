@@ -146,6 +146,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   initializeControls();
   drawWaveform();
   initializeTranscriptLog();
+
+  // View navigation
+  const navHomeBtn = document.getElementById('nav-home-btn');
+  const navFtBtn = document.getElementById('nav-ft-btn');
+  if (navHomeBtn && window.navAPI) {
+    navHomeBtn.addEventListener('click', () => window.navAPI.goHome());
+  }
+  if (navFtBtn && window.navAPI) {
+    navFtBtn.addEventListener('click', () => window.navAPI.goFileTranscribe());
+  }
 });
 
 logMessage('Renderer process started.');

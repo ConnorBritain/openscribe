@@ -16,6 +16,10 @@ contextBridge.exposeInMainWorld('settingsAPI', {
   // Function to call vocabulary API
   callVocabularyAPI: (command, data = {}) => ipcRenderer.invoke('vocabulary-api', command, data),
 
+  // API key management
+  getApiKeyStatus: () => ipcRenderer.invoke('apikey:status'),
+  saveApiKey: (provider, value) => ipcRenderer.invoke('apikey:save', { provider, value }),
+  deleteApiKey: (provider) => ipcRenderer.invoke('apikey:delete', { provider }),
   // Listen for navigation requests
   onNavigateToSection: (callback) => ipcRenderer.on('navigate-to-section', callback)
 });

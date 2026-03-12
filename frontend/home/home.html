@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenScribe</title>
+  <link rel="stylesheet" href="./home.css">
+</head>
+
+<body>
+  <div id="home-app">
+    <div class="home-header">
+      <img src="../../assets/app-icon.png" alt="OpenScribe" class="home-logo" />
+      <h1 class="home-title">OpenScribe</h1>
+      <p class="home-subtitle">Privacy-focused dictation and transcription</p>
+    </div>
+
+    <div class="home-cards">
+      <button id="btn-live-dictation" class="home-card">
+        <div class="card-icon">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+            <line x1="12" y1="19" x2="12" y2="23" />
+            <line x1="8" y1="23" x2="16" y2="23" />
+          </svg>
+        </div>
+        <span class="card-title">Live Dictation</span>
+        <span class="card-desc">Speak into your microphone for real-time transcription</span>
+      </button>
+
+      <button id="btn-file-transcribe" class="home-card">
+        <div class="card-icon">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+            <path d="M9 15l2 2 4-4" />
+          </svg>
+        </div>
+        <span class="card-title">File Transcription</span>
+        <span class="card-desc">Upload an audio file and transcribe with local or cloud models</span>
+      </button>
+    </div>
+
+    <div class="home-footer">
+      <span class="home-version">v1.0.0</span>
+    </div>
+  </div>
+
+  <script src="./home_renderer.js"></script>
+</body>
+
+</html>

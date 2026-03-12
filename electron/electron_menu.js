@@ -3,7 +3,7 @@
 
 const { Menu, app, shell } = require('electron');
 
-function createAppMenu({ createSettingsWindow, createHistoryWindow, createFileTranscribeWindow, getMainWindow }) {
+function createAppMenu({ createSettingsWindow, createHistoryWindow, createFileTranscribeWindow, getMainWindow, navigateToHome, navigateToDictation, navigateToFileTranscribe }) {
   const isMac = process.platform === 'darwin';
 
   const template = [
@@ -103,15 +103,28 @@ function createAppMenu({ createSettingsWindow, createHistoryWindow, createFileTr
         { role: 'zoom' },
         { type: 'separator' },
         {
-          label: 'Dictation',
+          label: 'Home',
           click: () => {
             const win = getMainWindow();
             if (win) win.show();
+            navigateToHome();
+          }
+        },
+        {
+          label: 'Live Dictation',
+          click: () => {
+            const win = getMainWindow();
+            if (win) win.show();
+            navigateToDictation();
           }
         },
         {
           label: 'Transcribe File',
-          click: () => createFileTranscribeWindow()
+          click: () => {
+            const win = getMainWindow();
+            if (win) win.show();
+            navigateToFileTranscribe();
+          }
         },
         {
           label: 'History',

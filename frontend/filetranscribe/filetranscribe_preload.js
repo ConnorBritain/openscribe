@@ -15,5 +15,12 @@ contextBridge.exposeInMainWorld('fileTranscribeAPI', {
     const handler = (_event, data) => callback(data);
     ipcRenderer.on('file:transcribe-result', handler);
     return () => ipcRenderer.removeListener('file:transcribe-result', handler);
-  }
+  },
+
+  // API key management
+  getApiKeyStatus: () => ipcRenderer.invoke('apikey:status'),
+  saveApiKey: (provider, value) => ipcRenderer.invoke('apikey:save', { provider, value }),
+  deleteApiKey: (provider) => ipcRenderer.invoke('apikey:delete', { provider }),
+  // Model management
+  ensureModel: (modelId) => ipcRenderer.invoke('ensure-model', modelId),
 });

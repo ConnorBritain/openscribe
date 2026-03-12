@@ -17,7 +17,7 @@
     "stopTranscribingShortcut",
     "retranscribeBackupShortcut",
     "openaiApiKey",
-    "googleCloudKeyPath",
+    "googleApiKey",
     "fileTranscriptionDefaults"
   ],
   "electronDefaults": {
@@ -47,7 +47,7 @@
     "secondaryAsrModel": null,
     "medicationAutoLearnEnabled": true,
     "openaiApiKey": "",
-    "googleCloudKeyPath": "",
+    "googleApiKey": "",
     "fileTranscriptionDefaults": {
       "modelId": "openai:whisper-1",
       "diarization": false,

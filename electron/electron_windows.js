@@ -8,13 +8,19 @@ const { store } = require('./electron_app_init');
 const handyUiConstants = require('../frontend/shared/handy_ui_constants.json');
 
 let mainWindow = null;
-// No separate proofing window in note-only mode
 
 const CLASSIC_WINDOW_BOUNDS = {
   width: 700,
   height: 500,
   xOffset: 60,
   yOffset: 60
+};
+
+const HOME_WINDOW_BOUNDS = {
+  width: 600,
+  height: 480,
+  xOffset: 100,
+  yOffset: 80
 };
 
 const HANDY_WINDOW_BOUNDS = {
@@ -24,6 +30,7 @@ const HANDY_WINDOW_BOUNDS = {
 };
 
 let currentUiMode = 'classic';
+let currentView = 'home'; // 'home', 'dictation', or 'filetranscribe'
 
 function normalizeUiMode(mode) {
   return mode === 'handy' ? 'handy' : 'classic';
@@ -97,26 +104,65 @@ function applyMainWindowUiMode(mode) {
   return normalizedMode;
 }
 
+function isShowingHome() {
+  return currentView === 'home';
+}
+
+function navigateToDictation() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  currentView = 'dictation';
+  mainWindow.loadFile(path.join(__dirname, '../frontend/main/index.html'))
+    .then(() => {
+      console.log('[Nav] Navigated to dictation view');
+      applyMainWindowUiMode(currentUiMode);
+    })
+    .catch((error) => {
+      console.error('[Nav] Failed to navigate to dictation:', error);
+    });
+}
+
+function navigateToFileTranscribe() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  currentView = 'filetranscribe';
+  mainWindow.loadFile(path.join(__dirname, '../frontend/filetranscribe/filetranscribe.html'))
+    .then(() => {
+      console.log('[Nav] Navigated to file transcribe view');
+    })
+    .catch((error) => {
+      console.error('[Nav] Failed to navigate to file transcribe:', error);
+    });
+}
+
+function navigateToHome() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  currentView = 'home';
+  mainWindow.loadFile(path.join(__dirname, '../frontend/home/home.html'))
+    .catch((error) => {
+      console.error('[Nav] Failed to navigate to home:', error);
+    });
+}
+
 function createWindow() {
   currentUiMode = normalizeUiMode(store.get('uiMode', 'classic'));
-  const initialBounds = getBoundsForMode(currentUiMode);
 
-  const isHandy = currentUiMode === 'handy';
+  // Home page gets its own compact size
+  const display = getDisplayForBounds();
+  const workArea = display.workArea;
 
   mainWindow = new BrowserWindow({
-    width: initialBounds.width,
-    height: initialBounds.height,
-    x: initialBounds.x,
-    y: initialBounds.y,
-    minWidth: isHandy ? HANDY_WINDOW_BOUNDS.width : 500,
-    minHeight: isHandy ? HANDY_WINDOW_BOUNDS.height : 300,
-    frame: !isHandy,
-    transparent: isHandy,
-    backgroundColor: isHandy ? '#00000000' : '#0c111a',
+    width: Math.min(HOME_WINDOW_BOUNDS.width, workArea.width),
+    height: Math.min(HOME_WINDOW_BOUNDS.height, workArea.height),
+    x: workArea.x + HOME_WINDOW_BOUNDS.xOffset,
+    y: workArea.y + HOME_WINDOW_BOUNDS.yOffset,
+    minWidth: 420,
+    minHeight: 360,
+    frame: true,
+    transparent: false,
+    backgroundColor: '#0c111a',
     title: 'OpenScribe',
-    hasShadow: !isHandy,
-    resizable: !isHandy,
-    maximizable: !isHandy,
+    hasShadow: true,
+    resizable: true,
+    maximizable: true,
     minimizable: true,
     icon: path.join(__dirname, '../assets/app-icon.png'),
     webPreferences: {
@@ -128,22 +174,35 @@ function createWindow() {
     show: false
   });
 
-  // Load the main window
-  const htmlPath = path.join(__dirname, '../frontend/main/index.html');
-  console.log('[DEBUG] Loading index.html from:', htmlPath);
-  mainWindow.loadFile(htmlPath)
+  // Load the home launcher page first
+  currentView = 'home';
+  mainWindow.loadFile(path.join(__dirname, '../frontend/home/home.html'))
     .then(() => {
-      console.log('[DEBUG] index.html loaded successfully');
+      console.log('[Nav] home.html loaded');
     })
     .catch((error) => {
-      console.error('[ERROR] Failed to load index.html:', error);
+      console.error('[Nav] Failed to load home.html:', error);
     });
 
-  // Show main window after it's loaded (keeping this for when we re-enable proper show)
   mainWindow.once('ready-to-show', () => {
-    console.log('[DEBUG] ready-to-show event fired');
     mainWindow.show();
-    applyMainWindowUiMode(currentUiMode);
+  });
+
+  // Navigation IPC handlers
+  ipcMain.on('home:open-live-dictation', () => {
+    navigateToDictation();
+  });
+
+  ipcMain.on('home:open-file-transcribe', () => {
+    navigateToFileTranscribe();
+  });
+
+  ipcMain.on('home:open-settings', () => {
+    createSettingsWindow();
+  });
+
+  ipcMain.on('nav:go-home', () => {
+    navigateToHome();
   });
 
   // IPC handler for resizing the main window from the renderer
@@ -156,15 +215,14 @@ function createWindow() {
       mainWindow.setBounds({
         x: currentBounds.x,
         y: currentBounds.y,
-        width: currentBounds.width, // Keep current width
+        width: currentBounds.width,
         height: Math.round(height)
-      }, true); // Animate the resize
+      }, true);
     }
   });
 
   mainWindow.on('closed', () => {
     mainWindow = null;
-    // No proofingWindow to close anymore
   });
 
   // Start Python backend when the window is ready
@@ -182,7 +240,6 @@ let historyWindow = null;
 function createSettingsWindow(section = null) {
   if (settingsWindow) {
     settingsWindow.focus();
-    // If a section is specified and window already exists, navigate to that section
     if (section) {
       settingsWindow.webContents.send('navigate-to-section', section);
     }
@@ -195,19 +252,18 @@ function createSettingsWindow(section = null) {
     title: 'OpenScribe Settings',
     icon: path.join(__dirname, '../assets/app-icon.png'),
     webPreferences: {
-      preload: path.join(__dirname, '../frontend/settings/settings_preload.js'), // Assuming a settings_preload.js for settings IPC
+      preload: path.join(__dirname, '../frontend/settings/settings_preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      devTools: true // Enable DevTools for settings window for easier debugging
+      devTools: true
     },
-    show: false // Don't show until ready
+    show: false
   });
 
   settingsWindow.loadFile(path.join(__dirname, '../frontend/settings/settings.html'));
 
   settingsWindow.once('ready-to-show', () => {
     settingsWindow.show();
-    // If a section is specified, navigate to it after the window is ready
     if (section) {
       settingsWindow.webContents.send('navigate-to-section', section);
     }
@@ -256,9 +312,18 @@ function createHistoryWindow() {
   return historyWindow;
 }
 
+// File transcribe window kept for standalone launch from tray/menu
 let fileTranscribeWindow = null;
 
 function createFileTranscribeWindow() {
+  // If main window is visible, navigate in-place instead
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show();
+    navigateToFileTranscribe();
+    return mainWindow;
+  }
+
+  // Fallback: standalone window (e.g., if main window was closed)
   if (fileTranscribeWindow) {
     fileTranscribeWindow.focus();
     return fileTranscribeWindow;
@@ -303,5 +368,9 @@ module.exports = {
   createHistoryWindow,
   createFileTranscribeWindow,
   applyMainWindowUiMode,
-  getCurrentUiMode
+  getCurrentUiMode,
+  navigateToDictation,
+  navigateToFileTranscribe,
+  navigateToHome,
+  isShowingHome
 };

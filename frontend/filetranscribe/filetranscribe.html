@@ -11,10 +11,54 @@
 </head>
 
 <body>
+  <!-- Top navigation bar -->
+  <nav id="view-nav" class="view-nav">
+    <button id="nav-home-btn" class="view-nav__back" title="Back to Home">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+      Home
+    </button>
+    <span class="view-nav__title">File Transcription</span>
+    <button id="nav-ld-btn" class="view-nav__link" title="Switch to Live Dictation">Live Dictation</button>
+  </nav>
+
   <div id="ft-app">
     <header id="ft-header">
       <h1>File Transcription</h1>
     </header>
+
+    <!-- API Key Status Banner -->
+    <section id="ft-apikey-section" class="apikey-section">
+      <div class="apikey-row">
+        <div class="apikey-provider">
+          <span class="apikey-label">OpenAI</span>
+          <span id="apikey-openai-status" class="apikey-status not-configured">Not configured</span>
+        </div>
+        <div class="apikey-actions">
+          <button id="apikey-openai-add" class="text-button">Add Key</button>
+          <button id="apikey-openai-delete" class="text-button danger hidden">Remove</button>
+        </div>
+      </div>
+      <div class="apikey-row">
+        <div class="apikey-provider">
+          <span class="apikey-label">Google AI</span>
+          <span id="apikey-google-status" class="apikey-status not-configured">Not configured</span>
+        </div>
+        <div class="apikey-actions">
+          <button id="apikey-google-add" class="text-button">Add Key</button>
+          <button id="apikey-google-delete" class="text-button danger hidden">Remove</button>
+        </div>
+      </div>
+
+      <!-- Inline API key entry (hidden by default) -->
+      <div id="apikey-entry-panel" class="apikey-entry-panel hidden">
+        <label id="apikey-entry-label" class="apikey-entry-label">OpenAI API Key</label>
+        <div class="apikey-entry-row">
+          <input type="password" id="apikey-entry-input" class="apikey-entry-input" placeholder="sk-..." autocomplete="off" />
+          <button id="apikey-entry-save" class="primary-button">Save</button>
+          <button id="apikey-entry-cancel" class="secondary-button">Cancel</button>
+        </div>
+      </div>
+    </section>
 
     <section id="ft-controls">
       <div class="control-row">
