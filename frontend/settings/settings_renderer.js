@@ -5,6 +5,7 @@ const sidebarLinks = {
   wakewords: document.getElementById('nav-wakewords'),
   asr: document.getElementById('nav-asr'),
   vocabulary: document.getElementById('nav-vocabulary'),
+  cloudapi: document.getElementById('nav-cloudapi'),
   about: document.getElementById('nav-about'),
 };
 const vocabularyNavBadge = document.getElementById('nav-vocabulary-badge');
@@ -12,6 +13,7 @@ const sections = {
   wakewords: document.getElementById('section-wakewords'),
   asr: document.getElementById('section-asr'),
   vocabulary: document.getElementById('section-vocabulary'),
+  cloudapi: document.getElementById('section-cloudapi'),
   about: document.getElementById('section-about'),
 };
 
@@ -22,7 +24,10 @@ const ASR_MODELS = [
   { id: 'mlx-community/parakeet-tdt-0.6b-v3', name: 'Parakeet-TDT-0.6B-v3 – Latest MLX build' },
   { id: 'mlx-community/Voxtral-Mini-3B-2507-bf16', name: 'Voxtral Mini 3B (bf16) – MLX Audio' },
   { id: 'google/medasr', name: 'MedASR (Medical) – Optimized for medical dictation' },
-  { id: 'apple:speech:ondevice', name: 'Apple Speech (on-device, macOS) – No model download' }
+  { id: 'apple:speech:ondevice', name: 'Apple Speech (on-device, macOS) – No model download' },
+  { id: 'openai:whisper-1', name: 'OpenAI Whisper – Cloud API (requires API key)' },
+  { id: 'openai:gpt-4o-transcribe', name: 'OpenAI GPT-4o Transcribe – Cloud API (requires API key)' },
+  { id: 'google:chirp_2', name: 'Google Chirp 2 – Cloud API (requires key file)' }
 ];
 
 // ASR Model Elements
@@ -546,6 +551,14 @@ async function loadAndPopulateSettings() {
     if (useMedgemmaToggle) {
       useMedgemmaToggle.checked = settings.useMedGemmaPostProcessing === true;
     }
+
+    // Load Cloud API settings
+    if (openaiApiKeyInput && settings.openaiApiKey) {
+      openaiApiKeyInput.value = settings.openaiApiKey;
+    }
+    if (googleCloudKeyInput && settings.googleCloudKeyPath) {
+      googleCloudKeyInput.value = settings.googleCloudKeyPath;
+    }
   } catch (error) {
     console.error('ERROR: Error loading settings:', error);
     if (wakeWordsStatus) {
@@ -1068,6 +1081,30 @@ if (medicationAutoLearnToggle) {
 }
 if (medicationAutoLearnRunNowButton) {
   medicationAutoLearnRunNowButton.addEventListener('click', runMedicationAutoLearnNow);
+}
+
+// --- Cloud API Settings ---
+const openaiApiKeyInput = document.getElementById('openai-api-key-input');
+const googleCloudKeyInput = document.getElementById('google-cloud-key-input');
+const saveCloudApiButton = document.getElementById('save-cloudapi-button');
+const cloudApiStatus = document.getElementById('cloudapi-status');
+
+if (saveCloudApiButton) {
+  saveCloudApiButton.addEventListener('click', () => {
+    const openaiKey = openaiApiKeyInput ? openaiApiKeyInput.value.trim() : '';
+    const googleKeyPath = googleCloudKeyInput ? googleCloudKeyInput.value.trim() : '';
+
+    window.settingsAPI.saveSettings({
+      openaiApiKey: openaiKey,
+      googleCloudKeyPath: googleKeyPath
+    });
+
+    if (cloudApiStatus) {
+      cloudApiStatus.textContent = 'Cloud API settings saved!';
+      cloudApiStatus.style.color = 'green';
+      setTimeout(() => { cloudApiStatus.textContent = ''; }, 3000);
+    }
+  });
 }
 
 // --- Initialization ---

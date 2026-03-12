@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-LLM Post-Processor for CitrixTranscriber
+LLM Post-Processor for OpenScribe
 Handles optional LLM-based post-processing of transcriptions using LM Studio.
 """
 

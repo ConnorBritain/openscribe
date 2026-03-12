@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Transcribe File</title>
+  <link rel="stylesheet" href="./filetranscribe.css">
+</head>
+
+<body>
+  <div id="ft-app">
+    <header id="ft-header">
+      <h1>File Transcription</h1>
+    </header>
+
+    <section id="ft-controls">
+      <div class="control-row">
+        <button id="ft-pick-file" class="primary-button">Select File...</button>
+        <span id="ft-file-name" class="file-name-label">No file selected</span>
+        <button id="ft-clear-file" class="text-button hidden">Clear</button>
+      </div>
+
+      <div class="control-row">
+        <div class="control-group">
+          <label for="ft-backend-select">Backend:</label>
+          <select id="ft-backend-select">
+            <option value="openai:whisper-1">OpenAI Whisper</option>
+            <option value="openai:gpt-4o-transcribe">OpenAI GPT-4o Transcribe</option>
+            <option value="google:chirp_2">Google Chirp 2</option>
+          </select>
+        </div>
+        <div class="control-group">
+          <label for="ft-language-select">Language:</label>
+          <select id="ft-language-select">
+            <option value="en">English</option>
+            <option value="es">Spanish</option>
+            <option value="fr">French</option>
+            <option value="de">German</option>
+            <option value="pt">Portuguese</option>
+            <option value="ja">Japanese</option>
+            <option value="zh">Chinese</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="control-row">
+        <label class="checkbox-label">
+          <input type="checkbox" id="ft-diarization-toggle">
+          Speaker Labels
+          <span class="hint">(Google Chirp 2 only)</span>
+        </label>
+      </div>
+
+      <div class="control-row">
+        <button id="ft-transcribe-button" class="action-button" disabled>Transcribe</button>
+      </div>
+    </section>
+
+    <section id="ft-progress" class="hidden">
+      <div class="progress-container">
+        <span id="ft-progress-label">Starting...</span>
+        <div class="progress-bar-bg">
+          <div id="ft-progress-bar" class="progress-bar-fill" style="width: 0%"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="ft-result" class="hidden">
+      <h2>Transcript</h2>
+      <div id="ft-transcript" class="transcript-content" tabindex="0"></div>
+    </section>
+
+    <footer id="ft-actions" class="hidden">
+      <button id="ft-copy-button" class="primary-button">Copy to Clipboard</button>
+      <button id="ft-save-button" class="secondary-button">Save as .txt</button>
+    </footer>
+
+    <p id="ft-error" class="error-message hidden"></p>
+  </div>
+
+  <script src="./filetranscribe_renderer.js"></script>
+</body>
+
+</html>

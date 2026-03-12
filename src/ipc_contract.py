@@ -22,6 +22,8 @@ _DEFAULT_CONTRACT = {
         "retranscribeEnd": "RETRANSCRIBE_END:",
         "retranscribeQuickResult": "RETRANSCRIBE_QUICK_RESULT:",
         "hotkeys": "HOTKEYS:",
+        "transcribeFileProgress": "TRANSCRIBE_FILE_PROGRESS:",
+        "transcribeFileResult": "TRANSCRIBE_FILE_RESULT:",
     },
     "audioStates": ["inactive", "preparing", "activation", "dictation", "processing"],
     "lifecycleStates": [

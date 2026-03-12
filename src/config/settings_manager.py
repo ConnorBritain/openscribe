@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Settings Manager for CitrixTranscriber
+Settings Manager for OpenScribe
 Handles saving and loading user preferences between sessions.
 """
 

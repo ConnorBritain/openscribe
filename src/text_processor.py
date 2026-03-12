@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Text Processor for CitrixTranscriber
+Text Processor for OpenScribe
 Handles post-processing of transcribed text including filler word removal.
 """
 

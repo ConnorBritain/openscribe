@@ -1,10 +1,11 @@
 // main.js (modular entry point)
 const { app } = require('electron');
 const path = require('path');
-const { createWindow, getMainWindow, createSettingsWindow, createHistoryWindow } = require('./electron/electron_windows');
+const { createWindow, getMainWindow, createSettingsWindow, createHistoryWindow, createFileTranscribeWindow } = require('./electron/electron_windows');
 const { createTrayIcon } = require('./electron/electron_tray');
 const { initializeIpcHandlers } = require('./electron/electron_ipc');
-const { setupAppLifecycle } = require('./electron/electron_lifecycle'); // Import lifecycle setup
+const { setupAppLifecycle } = require('./electron/electron_lifecycle');
+const { createAppMenu } = require('./electron/electron_menu');
 
 function main() {
   // Setup app lifecycle handlers first
@@ -17,10 +18,18 @@ function main() {
       app.dock.setIcon(iconPath);
     }
 
+    // Set up application menu bar
+    createAppMenu({
+      createSettingsWindow,
+      createHistoryWindow,
+      createFileTranscribeWindow,
+      getMainWindow
+    });
+
     createWindow();
     initializeIpcHandlers();
     setTimeout(() => {
-      createTrayIcon(getMainWindow, createSettingsWindow, createHistoryWindow, app);
+      createTrayIcon(getMainWindow, createSettingsWindow, createHistoryWindow, app, createFileTranscribeWindow);
     }, 300);
   });
 }

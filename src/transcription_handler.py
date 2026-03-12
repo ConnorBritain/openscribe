@@ -246,7 +246,7 @@ class TranscriptionHandler:
         else:
             # Try to get from saved settings, fall back to config default
             try:
-                from settings_manager import settings_manager
+                from src.config.settings_manager import settings_manager
                 self.selected_asr_model = settings_manager.get_setting("selectedAsrModel", config.DEFAULT_ASR_MODEL)
             except ImportError:
                 # In case settings_manager is not available (testing, etc.)
@@ -466,6 +466,10 @@ class TranscriptionHandler:
             "whisper", "parakeet", or "voxtral"
         """
         model_id_lower = model_id.lower()
+        if model_id_lower.startswith("openai:"):
+            return "openai"
+        if model_id_lower.startswith("google:"):
+            return "google"
         if model_id_lower.startswith("apple:"):
             return "apple"
         if "voxtral" in model_id_lower:

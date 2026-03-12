@@ -2,7 +2,7 @@
 """
 Test Local API Server
 Validates the local HTTP server endpoints, application state transitions,
-and process lifecycle logic for the CitrixTranscriber backend.
+and process lifecycle logic for the OpenScribe backend.
 """
 
 import json

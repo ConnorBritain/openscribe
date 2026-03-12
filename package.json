@@ -1,7 +1,7 @@
 {
-  "name": "professional-transcriber-electron",
+  "name": "openscribe",
   "version": "1.0.0",
-  "description": "Electron frontend for the Professional Transcriber",
+  "description": "OpenScribe — Privacy-focused dictation and transcription",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -27,8 +27,8 @@
     "python-shell": "^5.0.0"
   },
   "build": {
-    "appId": "com.professionaltranscriber.app",
-    "productName": "Professional Transcriber",
+    "appId": "org.openscribe.app",
+    "productName": "OpenScribe",
     "directories": {
       "output": "dist"
     },
@@ -116,7 +116,7 @@
       ]
     },
     "dmg": {
-      "title": "Professional Transcriber ${version}",
+      "title": "OpenScribe ${version}",
       "iconSize": 100,
       "contents": [
         {

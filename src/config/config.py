@@ -99,6 +99,9 @@ AVAILABLE_ASR_MODELS = {
     "Voxtral Mini 3B (bf16)": "mlx-community/Voxtral-Mini-3B-2507-bf16",
     "MedASR (Medical)": "google/medasr",
     "Apple Speech (on-device, macOS)": "apple:speech:ondevice",
+    "OpenAI Whisper": "openai:whisper-1",
+    "OpenAI GPT-4o Transcribe": "openai:gpt-4o-transcribe",
+    "Google Chirp 2": "google:chirp_2",
 }
 DEFAULT_ASR_MODEL = "mlx-community/whisper-large-v3-turbo"
 
@@ -158,7 +161,7 @@ HOTKEY_COMBINATIONS = {
 }
 
 # --- GUI ---
-APP_TITLE = "Professional Dictation Transcriber"
+APP_TITLE = "OpenScribe"
 DEFAULT_THEME = "arc"  # Example theme, requires ttkthemes
 
 # --- Other ---

@@ -350,8 +350,8 @@
                 <span>Vocabulary</span>
                 <span id="nav-vocabulary-badge" class="nav-badge hidden">0</span>
             </li>
+            <li id="nav-cloudapi">Cloud API</li>
             <li id="nav-about">About</li>
-            <!-- Add other sections as needed -->
         </ul>
     </div>
 
@@ -585,9 +585,45 @@
         <p id="vocabulary-status" style="color: green; margin-top: 12px; margin-bottom: 30px;"></p>
     </div>
 
+    <div id="section-cloudapi" class="settings-section" style="display: none; padding-right: 30px; padding-bottom: 60px;">
+        <h2>Cloud API Keys</h2>
+        <p style="color: #666; margin-bottom: 20px;">Configure API keys for cloud-based transcription backends. Keys are stored securely in the app's encrypted settings.</p>
+
+        <div class="handy-card">
+            <div class="handy-row" style="flex-direction: column; align-items: flex-start; gap: 8px;">
+                <div class="handy-row__label">
+                    <span>OpenAI API Key</span>
+                    <button class="info-tip" type="button"
+                        data-tip="Required for OpenAI Whisper and GPT-4o Transcribe. Get your key at platform.openai.com.">i</button>
+                </div>
+                <input type="password" id="openai-api-key-input" placeholder="sk-..."
+                    style="width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #d0d5dd; border-radius: 6px; font-size: 14px;">
+                <small class="inline-muted">Used for File Transcription with OpenAI models. Never sent to any server except OpenAI.</small>
+            </div>
+        </div>
+
+        <div class="handy-card" style="margin-top: 16px;">
+            <div class="handy-row" style="flex-direction: column; align-items: flex-start; gap: 8px;">
+                <div class="handy-row__label">
+                    <span>Google Cloud Key File</span>
+                    <button class="info-tip" type="button"
+                        data-tip="Path to a Google Cloud service account JSON key file. Required for Google Chirp 2 transcription with speaker diarization.">i</button>
+                </div>
+                <div style="display: flex; gap: 8px; width: 100%;">
+                    <input type="text" id="google-cloud-key-input" placeholder="/path/to/service-account.json"
+                        style="flex: 1; padding: 10px 12px; border: 1px solid #d0d5dd; border-radius: 6px; font-size: 14px;">
+                </div>
+                <small class="inline-muted">Service account JSON file for Google Cloud Speech-to-Text v2.</small>
+            </div>
+        </div>
+
+        <button id="save-cloudapi-button" style="margin-top: 18px;">Save Cloud API Settings</button>
+        <p id="cloudapi-status" style="color: green; margin-top: 10px;"></p>
+    </div>
+
     <div id="section-about" class="settings-section" style="display: none; padding-right: 30px; padding-bottom: 60px;">
         <h2>About</h2>
-        <p class="about-copy">CitrixTranscriberASR is built for fast, local-first medical dictation.</p>
+        <p class="about-copy">OpenScribe is a privacy-focused dictation and transcription tool.</p>
 
         <h3 class="handy-section-title">ACKNOWLEDGMENTS</h3>
         <div class="handy-card">

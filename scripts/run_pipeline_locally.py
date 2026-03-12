@@ -150,7 +150,7 @@ def run_phase3_tests():
 
 def main():
     """Main pipeline execution"""
-    print("🚀 CitrixTranscriber Local Testing Pipeline")
+    print("🚀 OpenScribe Local Testing Pipeline")
     print("=" * 60)
 
     start_time = time.time()

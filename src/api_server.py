@@ -158,7 +158,7 @@ class APIRequestHandler(BaseHTTPRequestHandler):
         elif route == '/events':
             self._send_events(parsed_url.query)
         elif route == '/':
-            self._send_response(200, "CitrixTranscriber Local API Running")
+            self._send_response(200, "OpenScribe Local API Running")
         else:
             self._send_response(404, f"Endpoint not found: {route}", success=False)
 

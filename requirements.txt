@@ -20,6 +20,13 @@ librosa>=0.10.0  # For MedASR audio loading
 transformers>=4.40.0  # For MedASR pipeline
 torch>=2.0.0  # Required by transformers for MedASR
 
+# Audio conversion
+pydub>=0.25.1
+
+# Cloud ASR backends
+httpx>=0.27.0
+google-cloud-speech>=2.24.0  # optional, for Google Chirp 2
+
 # Testing dependencies
 pytest>=7.0.0
 pytest-cov>=4.0.0

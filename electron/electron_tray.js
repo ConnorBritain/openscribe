@@ -70,9 +70,10 @@ function buildContextMenu() {
     { label: 'Settings...', accelerator: 'CmdOrCtrl+,', click: trayContextDeps.createSettingsWindow },
     { label: 'Vocabulary', click: () => trayContextDeps.createSettingsWindow('vocabulary') },
     { label: 'History…', click: trayContextDeps.createHistoryWindow },
+    { label: 'Transcribe File…', click: trayContextDeps.createFileTranscribeWindow },
     { type: 'separator' },
     { label: 'Show Floating UI', click: () => { const win = trayContextDeps.getMainWindow ? trayContextDeps.getMainWindow() : null; if (win) win.show(); } },
-    { label: 'Quit Citrix Transcriber', accelerator: 'CmdOrCtrl+Q', click: () => { quitApp.quit(); } }
+    { label: 'Quit OpenScribe', accelerator: 'CmdOrCtrl+Q', click: () => { quitApp.quit(); } }
   ]);
 }
 
@@ -117,7 +118,7 @@ function setTrayIconByState(state) {
   }
 }
 
-function createTrayIcon(getMainWindow, createSettingsWindow, createHistoryWindow, appInstance) {
+function createTrayIcon(getMainWindow, createSettingsWindow, createHistoryWindow, appInstance, createFileTranscribeWindow) {
   if (tray) {
     console.log('Tray icon already exists.');
     return;
@@ -127,6 +128,7 @@ function createTrayIcon(getMainWindow, createSettingsWindow, createHistoryWindow
     getMainWindow,
     createSettingsWindow,
     createHistoryWindow,
+    createFileTranscribeWindow,
     app: appInstance
   };
 

@@ -15,7 +15,10 @@
     "selectedMicrophoneId",
     "transcribeShortcut",
     "stopTranscribingShortcut",
-    "retranscribeBackupShortcut"
+    "retranscribeBackupShortcut",
+    "openaiApiKey",
+    "googleCloudKeyPath",
+    "fileTranscriptionDefaults"
   ],
   "electronDefaults": {
     "wakeWords": {
@@ -42,7 +45,14 @@
     "stopTranscribingShortcut": "Cmd+Shift+S",
     "retranscribeBackupShortcut": "Ctrl+Option+R",
     "secondaryAsrModel": null,
-    "medicationAutoLearnEnabled": true
+    "medicationAutoLearnEnabled": true,
+    "openaiApiKey": "",
+    "googleCloudKeyPath": "",
+    "fileTranscriptionDefaults": {
+      "modelId": "openai:whisper-1",
+      "diarization": false,
+      "language": "en"
+    }
   },
   "pythonDefaults": {
     "programActive": true,

@@ -1,7 +1,9 @@
 // electron_ipc.js
 // Handles IPC handlers for renderer-main process communication
 
-const { ipcMain } = require('electron');
+const { ipcMain, dialog } = require('electron');
+const fs = require('fs');
+const path = require('path');
 const { setTrayIconByState, refreshTrayMenu } = require('./electron_tray');
 const { store } = require('./electron_app_init'); // For accessing electron-store
 const { getPythonShell, getActualAvailableLLMs } = require('./electron_python');
@@ -126,6 +128,15 @@ function initializeIpcHandlers() {
       if (typeof settings.retranscribeBackupShortcut === 'string' && settings.retranscribeBackupShortcut.trim()) {
         store.set('retranscribeBackupShortcut', settings.retranscribeBackupShortcut.trim());
       }
+      if (typeof settings.openaiApiKey === 'string') {
+        store.set('openaiApiKey', settings.openaiApiKey);
+      }
+      if (typeof settings.googleCloudKeyPath === 'string') {
+        store.set('googleCloudKeyPath', settings.googleCloudKeyPath);
+      }
+      if (settings.fileTranscriptionDefaults && typeof settings.fileTranscriptionDefaults === 'object') {
+        store.set('fileTranscriptionDefaults', settings.fileTranscriptionDefaults);
+      }
 
       if (requestedUiMode) {
         applyMainWindowUiMode(requestedUiMode);
@@ -166,7 +177,10 @@ function initializeIpcHandlers() {
       transcribeShortcut: store.get('transcribeShortcut', defaults.transcribeShortcut),
       stopTranscribingShortcut: store.get('stopTranscribingShortcut', defaults.stopTranscribingShortcut),
       retranscribeBackupShortcut: store.get('retranscribeBackupShortcut', defaults.retranscribeBackupShortcut),
-      availableModels: getActualAvailableLLMs() || []
+      availableModels: getActualAvailableLLMs() || [],
+      openaiApiKey: store.get('openaiApiKey', defaults.openaiApiKey || ''),
+      googleCloudKeyPath: store.get('googleCloudKeyPath', defaults.googleCloudKeyPath || ''),
+      fileTranscriptionDefaults: store.get('fileTranscriptionDefaults', defaults.fileTranscriptionDefaults || {})
     };
     console.log('[IPC] load-settings: returning', settings);
     return settings;
@@ -416,6 +430,127 @@ function initializeIpcHandlers() {
     } catch (error) {
       console.error('[IPC] Error in vocabulary API:', error);
       return { success: false, error: error.message };
+    }
+  });
+
+  // --- File Transcription Handlers ---
+
+  ipcMain.handle('file:pick', async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Select Audio File',
+      filters: [
+        { name: 'Audio Files', extensions: ['mp3', 'wav', 'm4a', 'webm', 'mp4', 'ogg', 'flac'] }
+      ],
+      properties: ['openFile']
+    });
+
+    if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+      return null;
+    }
+
+    const filePath = result.filePaths[0];
+    return {
+      filePath,
+      fileName: path.basename(filePath)
+    };
+  });
+
+  ipcMain.handle('file:transcribe', async (event, opts) => {
+    console.log('[IPC] file:transcribe received:', opts);
+    const pythonShell = getPythonShell();
+    if (!pythonShell || !pythonShell.send) {
+      return { success: false, error: 'Python backend not available.' };
+    }
+
+    const requestId = `ft_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const sender = event.sender;
+
+    // Resolve API key from store (never expose raw key to renderer)
+    const modelId = opts.modelId || 'openai:whisper-1';
+    let apiKey = '';
+    if (modelId.startsWith('openai:')) {
+      apiKey = store.get('openaiApiKey', '') || '';
+    } else if (modelId.startsWith('google:')) {
+      apiKey = store.get('googleCloudKeyPath', '') || '';
+    }
+
+    const payload = {
+      filePath: opts.filePath,
+      modelId,
+      apiKey,
+      diarization: !!opts.diarization,
+      language: opts.language || 'en'
+    };
+
+    // Set up listeners for progress and result messages from Python
+    const messageHandler = (message) => {
+      if (typeof message !== 'string') return;
+
+      const progressPrefix = `TRANSCRIBE_FILE_PROGRESS:${requestId}:`;
+      const resultPrefix = `TRANSCRIBE_FILE_RESULT:${requestId}:`;
+
+      if (message.startsWith(progressPrefix)) {
+        try {
+          const data = JSON.parse(message.substring(progressPrefix.length));
+          if (!sender.isDestroyed()) {
+            sender.send('file:transcribe-progress', data);
+          }
+        } catch (e) {
+          console.error('[IPC] Malformed file transcribe progress:', e);
+        }
+      } else if (message.startsWith(resultPrefix)) {
+        pythonShell.removeListener('message', messageHandler);
+        try {
+          const data = JSON.parse(message.substring(resultPrefix.length));
+          if (!sender.isDestroyed()) {
+            sender.send('file:transcribe-result', data);
+          }
+        } catch (e) {
+          console.error('[IPC] Malformed file transcribe result:', e);
+          if (!sender.isDestroyed()) {
+            sender.send('file:transcribe-result', { success: false, error: 'Invalid response from backend.' });
+          }
+        }
+      }
+    };
+
+    pythonShell.on('message', messageHandler);
+
+    // Send command to Python
+    const cmd = `TRANSCRIBE_FILE:${requestId}:${JSON.stringify(payload)}`;
+    pythonShell.send(cmd);
+
+    // Timeout after 10 minutes
+    setTimeout(() => {
+      pythonShell.removeListener('message', messageHandler);
+      if (!sender.isDestroyed()) {
+        sender.send('file:transcribe-result', { success: false, error: 'File transcription timed out.' });
+      }
+    }, 600000);
+
+    return { success: true, requestId };
+  });
+
+  ipcMain.handle('file:export', async (_event, { text, format, suggestedName }) => {
+    const ext = format === 'txt' ? 'txt' : format;
+    const result = await dialog.showSaveDialog({
+      title: 'Save Transcript',
+      defaultPath: suggestedName || `transcript.${ext}`,
+      filters: [
+        { name: 'Text Files', extensions: [ext] }
+      ]
+    });
+
+    if (result.canceled || !result.filePath) {
+      return { success: false };
+    }
+
+    try {
+      fs.writeFileSync(result.filePath, text, 'utf-8');
+      return { success: true, filePath: result.filePath };
+    } catch (err) {
+      console.error('[IPC] file:export failed:', err);
+      return { success: false, error: err.message };
     }
   });
 

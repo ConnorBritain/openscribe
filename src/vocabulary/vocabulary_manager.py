@@ -1,6 +1,6 @@
 """
 Vocabulary Management System
-Handles custom vocabulary, corrections, and adaptive learning for CitrixTranscriber
+Handles custom vocabulary, corrections, and adaptive learning for OpenScribe
 """
 
 import json

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Redact historical logs in CitrixTranscriberASR."""
+"""Redact historical logs in OpenScribe."""
 
 from __future__ import annotations
 

@@ -1490,6 +1490,7 @@ class Application:
             ("LIST_MICROPHONES:", self._handle_list_microphones_command),
             ("REPASTE:", self._handle_repaste_command),
             ("RETRANSCRIBE_AUDIO:", self._handle_retranscribe_audio_command),
+            ("TRANSCRIBE_FILE:", self._handle_transcribe_file_command),
         )
 
     def process_stdin_command(self, command_line: str) -> bool:
@@ -1737,6 +1738,159 @@ class Application:
                 print(f"RETRANSCRIBE_RESULT:{request_id}:{json.dumps(error_payload)}", flush=True)
                 sys.stdout.flush()
         return True
+
+    def _handle_transcribe_file_command(self, command_line: str) -> bool:
+        """Handle TRANSCRIBE_FILE:<requestId>:<json> command."""
+        try:
+            parts = command_line.split(":", 2)
+            if len(parts) < 3:
+                log_text("FILE_TRANSCRIBE_ERROR", f"Invalid TRANSCRIBE_FILE format: {command_line}")
+                return True
+
+            request_id = parts[1]
+            payload_str = parts[2]
+            payload = json.loads(payload_str)
+
+            thread = threading.Thread(
+                target=self._transcribe_file_worker,
+                args=(request_id, payload),
+                daemon=True,
+            )
+            thread.start()
+        except Exception as e:
+            log_text("FILE_TRANSCRIBE_ERROR", f"Failed to start file transcription: {e}")
+        return True
+
+    def _transcribe_file_worker(self, request_id: str, payload: dict):
+        """Background worker for file transcription."""
+        def send_progress(stage: str, percent: int):
+            msg = json.dumps({"stage": stage, "percent": percent})
+            print(f"TRANSCRIBE_FILE_PROGRESS:{request_id}:{msg}", flush=True)
+            sys.stdout.flush()
+
+        def send_result(result_data: dict):
+            print(f"TRANSCRIBE_FILE_RESULT:{request_id}:{json.dumps(result_data)}", flush=True)
+            sys.stdout.flush()
+
+        try:
+            file_path = payload.get("filePath", "")
+            model_id = payload.get("modelId", "openai:whisper-1")
+            api_key = payload.get("apiKey", "")
+            diarization = payload.get("diarization", False)
+            language = payload.get("language", "en")
+
+            if not file_path or not os.path.isfile(file_path):
+                send_result({"success": False, "error": f"File not found: {file_path}"})
+                return
+
+            send_progress("Preparing...", 5)
+
+            # Determine backend type from model_id prefix
+            if model_id.startswith("openai:"):
+                send_progress("Sending to OpenAI...", 15)
+                actual_model = model_id.split(":", 1)[1]
+                self._transcribe_file_openai(request_id, file_path, actual_model, api_key, language, send_progress, send_result)
+            elif model_id.startswith("google:"):
+                send_progress("Sending to Google Cloud...", 15)
+                self._transcribe_file_google(request_id, file_path, api_key, language, diarization, send_progress, send_result)
+            else:
+                # Local model - convert audio if needed and use existing transcription handler
+                send_progress("Converting audio...", 10)
+                try:
+                    from src.audio_converter import convert_to_wav_16k, is_supported_format
+                    if not is_supported_format(file_path):
+                        send_result({"success": False, "error": f"Unsupported audio format: {os.path.splitext(file_path)[1]}"})
+                        return
+                    wav_path = convert_to_wav_16k(file_path)
+                except Exception as conv_err:
+                    send_result({"success": False, "error": f"Audio conversion failed: {conv_err}"})
+                    return
+
+                send_progress("Transcribing locally...", 30)
+                result_text = self._run_secondary_retranscribe(wav_path, model_id)
+                if result_text:
+                    result_text = text_processor.clean_text(result_text)
+                send_progress("Complete", 100)
+                send_result({
+                    "success": True,
+                    "fullText": result_text or "",
+                    "modelId": model_id,
+                    "diarizationEnabled": False,
+                })
+                return
+
+        except Exception as e:
+            log_text("FILE_TRANSCRIBE_ERROR", f"File transcription failed: {e}")
+            send_result({"success": False, "error": str(e)})
+
+    def _transcribe_file_openai(self, request_id, file_path, model, api_key, language, send_progress, send_result):
+        """Transcribe a file using the OpenAI cloud backend."""
+        try:
+            from src.cloud_backends.openai_backend import OpenAIBackend
+            backend = OpenAIBackend(api_key=api_key)
+            if not backend.is_available():
+                send_result({"success": False, "error": "OpenAI API key is not configured. Set it in Settings > Cloud API."})
+                return
+
+            send_progress("Transcribing with OpenAI...", 40)
+            result = backend.transcribe(file_path, options={"model": model, "language": language})
+            send_progress("Processing result...", 90)
+
+            # Apply text cleaning
+            full_text = result.full_text
+            if full_text:
+                full_text = text_processor.clean_text(full_text)
+
+            send_progress("Complete", 100)
+            result_dict = result.to_dict()
+            result_dict["success"] = True
+            result_dict["fullText"] = full_text
+            send_result(result_dict)
+
+        except Exception as e:
+            log_text("FILE_TRANSCRIBE_ERROR", f"OpenAI transcription failed: {e}")
+            send_result({"success": False, "error": str(e)})
+
+    def _transcribe_file_google(self, request_id, file_path, key_path, language, diarization, send_progress, send_result):
+        """Transcribe a file using the Google Cloud backend."""
+        try:
+            from src.cloud_backends.google_backend import GoogleBackend
+
+            # Google needs WAV conversion
+            send_progress("Converting audio for Google...", 15)
+            try:
+                from src.audio_converter import convert_to_wav_16k
+                wav_path = convert_to_wav_16k(file_path)
+            except Exception as conv_err:
+                send_result({"success": False, "error": f"Audio conversion failed: {conv_err}"})
+                return
+
+            backend = GoogleBackend(key_path=key_path)
+            if not backend.is_available():
+                send_result({"success": False, "error": "Google Cloud key file is not configured. Set it in Settings > Cloud API."})
+                return
+
+            send_progress("Transcribing with Google Chirp 2...", 40)
+            # Map short language code to BCP-47 if needed
+            lang_code = language if "-" in language else f"{language}-US" if language == "en" else language
+            result = backend.transcribe(wav_path, options={"language": lang_code, "diarization": diarization})
+            send_progress("Processing result...", 90)
+
+            full_text = result.full_text
+            if full_text:
+                full_text = text_processor.clean_text(full_text)
+
+            send_progress("Complete", 100)
+            result_dict = result.to_dict()
+            result_dict["success"] = True
+            result_dict["fullText"] = full_text
+            if diarization:
+                result_dict["diarizedText"] = result.to_diarized_text()
+            send_result(result_dict)
+
+        except Exception as e:
+            log_text("FILE_TRANSCRIBE_ERROR", f"Google transcription failed: {e}")
+            send_result({"success": False, "error": str(e)})
 
     def _handle_shutdown_command(self, _command_line: str) -> bool:
         log_text("COMMAND", "Shutdown command received from Electron.")

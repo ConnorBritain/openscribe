@@ -3,7 +3,7 @@
 Test Status Indicators and State Transitions
 
 This test suite validates the correct status indicator colors and state transitions
-that we've been debugging in the CitrixTranscriber application.
+that we've been debugging in the OpenScribe application.
 
 Tests cover:
 - Startup sequence with correct grey status messages

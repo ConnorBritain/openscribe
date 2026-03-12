@@ -11,10 +11,10 @@ let mainWindow = null;
 // No separate proofing window in note-only mode
 
 const CLASSIC_WINDOW_BOUNDS = {
-  width: 600,
-  height: 120,
-  xOffset: 20,
-  yOffset: 20
+  width: 700,
+  height: 500,
+  xOffset: 60,
+  yOffset: 60
 };
 
 const HANDY_WINDOW_BOUNDS = {
@@ -81,8 +81,8 @@ function applyMainWindowUiMode(mode) {
   const nextBounds = getBoundsForMode(normalizedMode, mainWindow.getBounds());
   mainWindow.setResizable(normalizedMode !== 'handy');
   mainWindow.setMinimumSize(
-    normalizedMode === 'handy' ? HANDY_WINDOW_BOUNDS.width : 420,
-    normalizedMode === 'handy' ? HANDY_WINDOW_BOUNDS.height : 90
+    normalizedMode === 'handy' ? HANDY_WINDOW_BOUNDS.width : 500,
+    normalizedMode === 'handy' ? HANDY_WINDOW_BOUNDS.height : 300
   );
   mainWindow.setBackgroundColor(normalizedMode === 'handy' ? '#00000000' : '#0c111a');
   if (typeof mainWindow.setHasShadow === 'function') {
@@ -101,26 +101,31 @@ function createWindow() {
   currentUiMode = normalizeUiMode(store.get('uiMode', 'classic'));
   const initialBounds = getBoundsForMode(currentUiMode);
 
+  const isHandy = currentUiMode === 'handy';
+
   mainWindow = new BrowserWindow({
     width: initialBounds.width,
     height: initialBounds.height,
     x: initialBounds.x,
     y: initialBounds.y,
-    minWidth: currentUiMode === 'handy' ? HANDY_WINDOW_BOUNDS.width : 420,
-    minHeight: currentUiMode === 'handy' ? HANDY_WINDOW_BOUNDS.height : 90,
-    frame: false,
-    transparent: true,
-    backgroundColor: currentUiMode === 'handy' ? '#00000000' : '#0c111a',
-    hasShadow: currentUiMode !== 'handy',
-    resizable: currentUiMode !== 'handy',
+    minWidth: isHandy ? HANDY_WINDOW_BOUNDS.width : 500,
+    minHeight: isHandy ? HANDY_WINDOW_BOUNDS.height : 300,
+    frame: !isHandy,
+    transparent: isHandy,
+    backgroundColor: isHandy ? '#00000000' : '#0c111a',
+    title: 'OpenScribe',
+    hasShadow: !isHandy,
+    resizable: !isHandy,
+    maximizable: !isHandy,
+    minimizable: true,
     icon: path.join(__dirname, '../assets/app-icon.png'),
     webPreferences: {
       preload: path.join(__dirname, '../frontend/main/preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      devTools: true // Enable DevTools for debugging
+      devTools: true
     },
-    show: true // Show immediately for debugging
+    show: false
   });
 
   // Load the main window
@@ -187,7 +192,7 @@ function createSettingsWindow(section = null) {
   settingsWindow = new BrowserWindow({
     width: 800,
     height: 600,
-    title: 'Citrix Transcriber Settings',
+    title: 'OpenScribe Settings',
     icon: path.join(__dirname, '../assets/app-icon.png'),
     webPreferences: {
       preload: path.join(__dirname, '../frontend/settings/settings_preload.js'), // Assuming a settings_preload.js for settings IPC
@@ -251,11 +256,52 @@ function createHistoryWindow() {
   return historyWindow;
 }
 
+let fileTranscribeWindow = null;
+
+function createFileTranscribeWindow() {
+  if (fileTranscribeWindow) {
+    fileTranscribeWindow.focus();
+    return fileTranscribeWindow;
+  }
+
+  fileTranscribeWindow = new BrowserWindow({
+    width: 800,
+    height: 640,
+    title: 'Transcribe File',
+    icon: path.join(__dirname, '../assets/app-icon.png'),
+    minWidth: 600,
+    minHeight: 400,
+    webPreferences: {
+      preload: path.join(__dirname, '../frontend/filetranscribe/filetranscribe_preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      devTools: true
+    },
+    show: false
+  });
+
+  fileTranscribeWindow.loadFile(path.join(__dirname, '../frontend/filetranscribe/filetranscribe.html'))
+    .catch((error) => {
+      console.error('[FileTranscribeWindow] Failed to load filetranscribe.html:', error);
+    });
+
+  fileTranscribeWindow.once('ready-to-show', () => {
+    fileTranscribeWindow.show();
+  });
+
+  fileTranscribeWindow.on('closed', () => {
+    fileTranscribeWindow = null;
+  });
+
+  return fileTranscribeWindow;
+}
+
 module.exports = {
   createWindow,
   getMainWindow,
   createSettingsWindow,
   createHistoryWindow,
+  createFileTranscribeWindow,
   applyMainWindowUiMode,
   getCurrentUiMode
 };
