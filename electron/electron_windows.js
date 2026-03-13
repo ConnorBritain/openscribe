@@ -201,6 +201,10 @@ function createWindow() {
     createSettingsWindow();
   });
 
+  ipcMain.on('open-settings', (event, section) => {
+    createSettingsWindow(section || null);
+  });
+
   ipcMain.on('nav:go-home', () => {
     navigateToHome();
   });

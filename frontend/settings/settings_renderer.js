@@ -1281,12 +1281,17 @@ window.addEventListener('DOMContentLoaded', () => {
   window.settingsAPI.onNavigateToSection((event, section) => {
     if (section === 'vocabulary') {
       console.log('Navigating to vocabulary section via tray menu');
-      showSection('vocabulary'); // Use 'vocabulary' not 'section-vocabulary'
-      // The showSection function already handles sidebar activation, but let's be explicit
+      showSection('vocabulary');
       setTimeout(() => {
         console.log('Loading vocabulary data after navigation...');
         loadVocabularyData();
       }, 100);
+    } else if (section === 'audioSources') {
+      showSection('wakewords');
+      setTimeout(() => {
+        const el = document.getElementById('audio-sources-list');
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 150);
     }
   });
 });

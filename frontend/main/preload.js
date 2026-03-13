@@ -48,6 +48,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Load shared IPC contract schema (message prefixes + payload states)
   loadIpcContract: () => ipcRenderer.invoke('load-ipc-contract'),
 
+  // Open settings window, optionally to a specific section
+  openSettings: (section) => ipcRenderer.send('open-settings', section || null),
+
   // Clean up listeners when they are no longer needed (important!)
   removeListener: (channel) => ipcRenderer.removeAllListeners(channel),
 

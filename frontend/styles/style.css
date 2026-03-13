@@ -1485,6 +1485,103 @@ body.ui-mode-handy #activity-pill.state-recording .pill-cancel-button {
     display: inline-flex;
 }
 
+/* Compact audio source strip (Audacity-style, shown in dictation panel) */
+.audio-source-strip {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: rgba(0, 0, 0, 0.03);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+    flex-shrink: 0;
+}
+
+.audio-source-strip__chips {
+    display: flex;
+    gap: 6px;
+    flex: 1;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.audio-source-strip__chips::-webkit-scrollbar {
+    display: none;
+}
+
+.source-chip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    background: #f0f0f4;
+    border: 1px solid #d9d9dd;
+    border-radius: 8px;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.source-chip__dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #c0c0c4;
+    flex-shrink: 0;
+    transition: background 150ms ease;
+}
+
+.source-chip__dot.active {
+    background: #34c759;
+    box-shadow: 0 0 4px rgba(52, 199, 89, 0.5);
+}
+
+.source-chip__name {
+    font-size: 12px;
+    font-weight: 600;
+    color: #1d1d1f;
+}
+
+.source-chip__bar {
+    width: 40px;
+    height: 4px;
+    background: rgba(0, 0, 0, 0.06);
+    border-radius: 2px;
+    overflow: hidden;
+    flex-shrink: 0;
+}
+
+.source-chip__bar-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 2px;
+    background: #4dd37a;
+    transition: width 80ms ease-out;
+}
+
+.audio-source-strip__routing-btn {
+    width: 28px;
+    height: 28px;
+    border: 1px solid #d9d9dd;
+    border-radius: 6px;
+    background: #f7f7f8;
+    color: #6d6d72;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    padding: 0;
+}
+
+.audio-source-strip__routing-btn:hover {
+    background: #ececef;
+    color: #1d1d1f;
+    border-color: #b0b0b4;
+}
+
+body.ui-mode-handy .audio-source-strip {
+    display: none !important;
+}
+
 /* Per-source audio level VU meters */
 .audio-source-levels {
     display: flex;

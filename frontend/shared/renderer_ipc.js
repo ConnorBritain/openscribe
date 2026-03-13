@@ -251,6 +251,59 @@ function updateAudioSourceLevels(sources) {
       el.remove();
     }
   });
+
+  // Also update the compact source strip
+  updateAudioSourceStrip(sources);
+}
+
+function updateAudioSourceStrip(sources) {
+  const strip = document.getElementById('audio-source-strip');
+  const chips = document.getElementById('audio-source-chips');
+  if (!strip || !chips) return;
+
+  // Only show strip when there are named sources (multi-source mode)
+  const namedSources = sources.filter((s) => s.name && s.name !== 'Unknown');
+  if (namedSources.length === 0) {
+    strip.classList.add('is-hidden');
+    return;
+  }
+  strip.classList.remove('is-hidden');
+
+  // Reconcile chip elements
+  const existingChips = chips.querySelectorAll('.source-chip');
+  const existingByName = new Map();
+  existingChips.forEach((el) => existingByName.set(el.dataset.sourceName, el));
+
+  const activeNames = new Set();
+  for (const src of namedSources) {
+    const name = src.name;
+    activeNames.add(name);
+    let chip = existingByName.get(name);
+    if (!chip) {
+      chip = document.createElement('div');
+      chip.className = 'source-chip';
+      chip.dataset.sourceName = name;
+      chip.innerHTML =
+        '<span class="source-chip__dot"></span>' +
+        '<span class="source-chip__name"></span>' +
+        '<span class="source-chip__bar"><span class="source-chip__bar-fill"></span></span>';
+      chips.appendChild(chip);
+    }
+    chip.querySelector('.source-chip__name').textContent = name;
+    const level = Math.max(0, Math.min(1, Number(src.level) || 0));
+    const fill = chip.querySelector('.source-chip__bar-fill');
+    fill.style.width = `${(level * 100).toFixed(1)}%`;
+
+    // Active indicator — dot glows when level > 0.02
+    const dot = chip.querySelector('.source-chip__dot');
+    dot.classList.toggle('active', level > 0.02);
+  }
+
+  existingChips.forEach((el) => {
+    if (!activeNames.has(el.dataset.sourceName)) {
+      el.remove();
+    }
+  });
 }
 
 function hideAudioSourceLevels() {
@@ -258,6 +311,10 @@ function hideAudioSourceLevels() {
   if (container) {
     container.classList.add('is-hidden');
     container.innerHTML = '';
+  }
+  const strip = document.getElementById('audio-source-strip');
+  if (strip) {
+    strip.classList.add('is-hidden');
   }
 }
 

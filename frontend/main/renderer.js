@@ -147,6 +147,14 @@ document.addEventListener('DOMContentLoaded', async () => {
   drawWaveform();
   initializeTranscriptLog();
 
+  // Audio routing button — opens settings to Audio Sources section
+  const audioRoutingBtn = document.getElementById('audio-routing-btn');
+  if (audioRoutingBtn && window.electronAPI && window.electronAPI.openSettings) {
+    audioRoutingBtn.addEventListener('click', () => {
+      window.electronAPI.openSettings('audioSources');
+    });
+  }
+
   // View navigation
   const navHomeBtn = document.getElementById('nav-home-btn');
   const navFtBtn = document.getElementById('nav-ft-btn');
