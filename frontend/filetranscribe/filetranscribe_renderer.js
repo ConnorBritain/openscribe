@@ -240,7 +240,7 @@ transcribeButton.addEventListener('click', async () => {
       filePath: selectedFilePath,
       modelId: backendSelect.value,
       diarization: diarizationToggle.checked,
-      language: languageSelect.value,
+      language: languageSelect.value
     };
     await window.fileTranscribeAPI.transcribe(opts);
   } catch (err) {

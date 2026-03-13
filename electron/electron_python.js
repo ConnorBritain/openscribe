@@ -381,7 +381,8 @@ function startPythonBackend(mainWindow) {
       process.env.CT_ELECTRON_VERBOSE === '1' &&
       !ipcContract.hasPrefix(trimmedMessage, 'audioMetrics') &&
       !ipcContract.hasPrefix(trimmedMessage, 'audioAmplitudeLegacy') &&
-      !ipcContract.hasPrefix(trimmedMessage, 'audioLevelsLegacy')
+      !ipcContract.hasPrefix(trimmedMessage, 'audioLevelsLegacy') &&
+      !ipcContract.hasPrefix(trimmedMessage, 'audioSourceLevels')
     ) {
       console.log(`[ElectronPython] Forwarding unhandled message to renderer: '${trimmedMessage}'`);
     }

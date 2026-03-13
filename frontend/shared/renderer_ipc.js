@@ -85,6 +85,7 @@ function processDictationState(rawState) {
     beginTranscriptSession();
     adjustWindowHeight(false, { forceState: 'collapsed' });
   } else if (leftRecording || (!isDictating && lastIsDictating)) {
+    hideAudioSourceLevels();
     adjustWindowHeight(false, { forceState: 'expanded' });
   }
 
@@ -128,9 +129,10 @@ function processDictationState(rawState) {
   lastLifecycleState = lifecycle;
 }
 
-function setResponseText(text) {
+function setResponseText(text, options = {}) {
   const cleaned = typeof text === 'string' ? text.trim() : '';
-  finalizeActiveTranscript(cleaned);
+  const speaker = options.speaker || null;
+  finalizeActiveTranscript(cleaned, { speaker });
   adjustWindowHeight(cleaned.length > 0, {
     forceState: 'expanded'
   });
@@ -203,6 +205,62 @@ function applyHandyLevels(levels, smooth = true) {
   }
 }
 
+function updateAudioSourceLevels(sources) {
+  const container = document.getElementById('audio-source-levels');
+  if (!container) {
+    return;
+  }
+
+  // Show container when we have sources
+  container.classList.remove('is-hidden');
+
+  // Reconcile DOM elements with source list
+  const existingBars = container.querySelectorAll('.audio-source-level');
+  const existingByName = new Map();
+  existingBars.forEach((el) => existingByName.set(el.dataset.sourceName, el));
+
+  const activeNames = new Set();
+  for (const src of sources) {
+    const name = src.name || 'Unknown';
+    activeNames.add(name);
+    let bar = existingByName.get(name);
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.className = 'audio-source-level';
+      bar.dataset.sourceName = name;
+      bar.innerHTML =
+        '<span class="audio-source-level__name"></span>' +
+        '<div class="audio-source-level__track">' +
+        '<div class="audio-source-level__fill"></div>' +
+        '</div>';
+      container.appendChild(bar);
+    }
+    bar.querySelector('.audio-source-level__name').textContent = name;
+    const level = Math.max(0, Math.min(1, Number(src.level) || 0));
+    const fill = bar.querySelector('.audio-source-level__fill');
+    fill.style.width = `${(level * 100).toFixed(1)}%`;
+
+    // Color coding: green < 0.6, yellow < 0.85, red >= 0.85
+    fill.classList.toggle('level-high', level >= 0.85);
+    fill.classList.toggle('level-mid', level >= 0.6 && level < 0.85);
+  }
+
+  // Remove stale entries
+  existingBars.forEach((el) => {
+    if (!activeNames.has(el.dataset.sourceName)) {
+      el.remove();
+    }
+  });
+}
+
+function hideAudioSourceLevels() {
+  const container = document.getElementById('audio-source-levels');
+  if (container) {
+    container.classList.add('is-hidden');
+    container.innerHTML = '';
+  }
+}
+
 function applyAudioMetricsPayload(payload) {
   const normalizedPayload = validateAudioMetricsPayload(payload);
   if (!normalizedPayload) {
@@ -235,6 +293,7 @@ export function registerIPCHandlers() {
         !hasPrefix(message, 'audioMetrics') &&
         !hasPrefix(message, 'audioAmplitudeLegacy') &&
         !hasPrefix(message, 'audioLevelsLegacy') &&
+        !hasPrefix(message, 'audioSourceLevels') &&
         !hasPrefix(message, 'state')
       ) {
         console.log('[IPC_FROM_PYTHON_RAW]', message);
@@ -252,8 +311,19 @@ export function registerIPCHandlers() {
           handleStatusMessage(statusPayload, 'grey');
         }
       } else if (hasPrefix(message, 'finalTranscript')) {
-        const transcriptText = stripPrefix(message, 'finalTranscript') || '';
-        setResponseText(transcriptText);
+        const rawTranscript = stripPrefix(message, 'finalTranscript') || '';
+        // Try parsing as JSON for speaker-tagged transcripts
+        try {
+          const parsed = JSON.parse(rawTranscript);
+          if (parsed && typeof parsed === 'object' && parsed.text) {
+            setResponseText(parsed.text, { speaker: parsed.speaker || null });
+          } else {
+            setResponseText(rawTranscript);
+          }
+        } catch (_e) {
+          // Plain text transcript (no speaker tag)
+          setResponseText(rawTranscript);
+        }
       } else if (hasPrefix(message, 'state')) {
         const stateData = validateStatePayload(parsePrefixedJson(message, 'state'));
         if (stateData) {
@@ -277,6 +347,11 @@ export function registerIPCHandlers() {
           applyHandyLevels(payload, true);
         } else {
           logMessage('Error parsing AUDIO_LEVELS payload.', 'error');
+        }
+      } else if (hasPrefix(message, 'audioSourceLevels')) {
+        const payload = parsePrefixedJson(message, 'audioSourceLevels');
+        if (Array.isArray(payload)) {
+          updateAudioSourceLevels(payload);
         }
       } else if (hasPrefix(message, 'historyEntry')) {
         const entryData = parsePrefixedJson(message, 'historyEntry');

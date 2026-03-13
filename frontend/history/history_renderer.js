@@ -69,6 +69,14 @@ function renderList() {
     title.textContent = formatDate(entry.createdAt);
     button.appendChild(title);
 
+    if (entry.speakerName) {
+      const speakerTag = document.createElement('span');
+      speakerTag.className = 'history-speaker-tag';
+      speakerTag.dataset.speaker = entry.speakerName;
+      speakerTag.textContent = entry.speakerName;
+      button.appendChild(speakerTag);
+    }
+
     const meta = document.createElement('p');
     const duration = formatDuration(entry.durationSeconds);
     const model = entry.metadata?.model ? ` • ${entry.metadata.model}` : '';
@@ -137,10 +145,21 @@ function renderDetail(entry) {
   detailTitle.textContent = formatDate(entry.createdAt);
   const durationText = formatDuration(entry.durationSeconds);
   const model = entry.metadata?.model ? ` • ${entry.metadata.model}` : '';
+  const speakerName = entry.metadata?.speakerName || entry.speakerName || null;
   detailMeta.textContent = `${durationText || 'Duration unknown'}${model}`;
 
   const transcriptText = entry.processedTranscript || entry.transcript || '';
-  transcriptContainer.textContent = transcriptText;
+  transcriptContainer.innerHTML = '';
+  if (speakerName) {
+    const speakerTag = document.createElement('span');
+    speakerTag.className = 'history-speaker-tag';
+    speakerTag.dataset.speaker = speakerName;
+    speakerTag.textContent = speakerName;
+    transcriptContainer.appendChild(speakerTag);
+    transcriptContainer.appendChild(document.createTextNode('\n' + transcriptText));
+  } else {
+    transcriptContainer.textContent = transcriptText;
+  }
 
   // Reset comparison view
   compareControls.classList.add('hidden');
@@ -170,6 +189,7 @@ function handleSearch(event) {
       const haystack = [
         entry.transcriptPreview || '',
         entry.metadata?.model || '',
+        entry.speakerName || '',
         entry.createdAt || ''
       ].join(' ').toLowerCase();
       return haystack.includes(query);
@@ -294,7 +314,7 @@ function cancelComparison() {
   comparisonView.classList.add('hidden');
   transcriptContainer.classList.remove('hidden-for-compare');
   compareButton.classList.remove('hidden');
-  compareModelSelect.value = "";
+  compareModelSelect.value = '';
 
   if (detailFeedback) {
     detailFeedback.textContent = '';
@@ -315,7 +335,7 @@ async function handleReTranscribe() {
   comparisonOriginalText.textContent = originalText;
 
   // Show loading in new text
-  comparisonNewTitle.textContent = "Re-transcribing...";
+  comparisonNewTitle.textContent = 'Re-transcribing...';
   comparisonNewText.innerHTML = '<div style="text-align:center; padding: 20px; color: #8cc4ff;"><i>Processing audio with new model...</i><br><small>This may take a moment to load the model.</small></div>';
 
   if (detailFeedback) {

@@ -65,7 +65,7 @@ function initializeIpcHandlers() {
       const pythonShell = getPythonShell();
       if (pythonShell && pythonShell.send) {
         const configPayload = buildPythonConfigFromStore(store, {
-          overrides: { wakeWordEnabled: enabledBool },
+          overrides: { wakeWordEnabled: enabledBool }
         });
         const msg = `CONFIG:${JSON.stringify(configPayload)}`;
         pythonShell.send(msg);
@@ -146,6 +146,9 @@ function initializeIpcHandlers() {
       if (settings.fileTranscriptionDefaults && typeof settings.fileTranscriptionDefaults === 'object') {
         store.set('fileTranscriptionDefaults', settings.fileTranscriptionDefaults);
       }
+      if (Array.isArray(settings.audioSources)) {
+        store.set('audioSources', settings.audioSources);
+      }
 
       if (requestedUiMode) {
         applyMainWindowUiMode(requestedUiMode);
@@ -191,7 +194,8 @@ function initializeIpcHandlers() {
       openaiApiKeyConfigured: !!store.get('openaiApiKey', ''),
       googleApiKeyConfigured: !!store.get('googleApiKey', ''),
       googleApiKeyMasked: maskApiKey(store.get('googleApiKey', '')),
-      fileTranscriptionDefaults: store.get('fileTranscriptionDefaults', defaults.fileTranscriptionDefaults || {})
+      fileTranscriptionDefaults: store.get('fileTranscriptionDefaults', defaults.fileTranscriptionDefaults || {}),
+      audioSources: store.get('audioSources', defaults.audioSources)
     };
     console.log('[IPC] load-settings: returning', settings);
     return settings;
@@ -227,6 +231,50 @@ function initializeIpcHandlers() {
       console.error('[IPC] Failed to set hotkey suspended state:', error);
       return { success: false, error: String(error) };
     }
+  });
+
+  ipcMain.handle('audio:get-sources', async () => {
+    const pythonShell = getPythonShell();
+    if (!pythonShell || !pythonShell.send) {
+      return { success: false, sources: [], error: 'Python backend not available.' };
+    }
+
+    return new Promise((resolve) => {
+      const requestId = `srcs_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      let resolved = false;
+
+      const cleanup = () => {
+        pythonShell.removeListener('message', messageHandler);
+      };
+
+      const resolveOnce = (payload) => {
+        if (!resolved) {
+          resolved = true;
+          cleanup();
+          resolve(payload);
+        }
+      };
+
+      const messageHandler = (message) => {
+        if (typeof message !== 'string') return;
+        const prefix = `AUDIO_SOURCES_LIST:${requestId}:`;
+        if (!message.startsWith(prefix)) return;
+        const payload = message.substring(prefix.length);
+        try {
+          const parsed = JSON.parse(payload);
+          resolveOnce(parsed);
+        } catch (error) {
+          resolveOnce({ success: false, sources: [], error: `Malformed audio sources payload: ${error}` });
+        }
+      };
+
+      pythonShell.on('message', messageHandler);
+      pythonShell.send(`GET_AUDIO_SOURCES:${requestId}`);
+
+      setTimeout(() => {
+        resolveOnce({ success: false, sources: [], error: 'Timed out while fetching audio sources.' });
+      }, 5000);
+    });
   });
 
   ipcMain.handle('list-microphones', async () => {

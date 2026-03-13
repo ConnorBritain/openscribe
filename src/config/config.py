@@ -1,4 +1,3 @@
-import pyaudio
 import os
 import sys
 
@@ -74,7 +73,8 @@ def resolve_resource_path(relative_path):
 SAMPLE_RATE = 16000
 FRAME_DURATION_MS = 30
 FRAME_SIZE = int(SAMPLE_RATE * FRAME_DURATION_MS / 1000)
-AUDIO_FORMAT = pyaudio.paInt16
+AUDIO_SAMPLE_WIDTH = 2  # bytes per sample (int16)
+AUDIO_DTYPE = 'int16'
 CHANNELS = 1
 VAD_AGGRESSIVENESS = 1  # 0 (least aggressive) to 3 (most aggressive) - Reduced to fix silence detection
 SILENCE_THRESHOLD_SECONDS = 1.5  # How long silence triggers processing

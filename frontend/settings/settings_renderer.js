@@ -6,7 +6,7 @@ const sidebarLinks = {
   asr: document.getElementById('nav-asr'),
   vocabulary: document.getElementById('nav-vocabulary'),
   cloudapi: document.getElementById('nav-cloudapi'),
-  about: document.getElementById('nav-about'),
+  about: document.getElementById('nav-about')
 };
 const vocabularyNavBadge = document.getElementById('nav-vocabulary-badge');
 const sections = {
@@ -14,7 +14,7 @@ const sections = {
   asr: document.getElementById('section-asr'),
   vocabulary: document.getElementById('section-vocabulary'),
   cloudapi: document.getElementById('section-cloudapi'),
-  about: document.getElementById('section-about'),
+  about: document.getElementById('section-about')
 };
 
 const ASR_MODELS = [
@@ -81,6 +81,12 @@ let activeShortcutCapture = null;
 let selectedMicrophoneId = 'default';
 let backendHotkeysSuspended = false;
 
+// Audio Sources
+const audioSourcesList = document.getElementById('audio-sources-list');
+const addAudioSourceButton = document.getElementById('add-audio-source-button');
+let audioSourcesState = [{ deviceId: 'default', speakerName: '' }];
+let availableAudioDevices = [];
+
 const shortcutButtonMap = {
   transcribe: transcribeShortcutButton,
   stopTranscribing: stopShortcutButton,
@@ -89,7 +95,7 @@ const shortcutButtonMap = {
 const shortcutLabelMap = {
   transcribe: 'Transcribe Shortcut',
   stopTranscribing: 'Stop Transcribing Shortcut',
-  retranscribeBackup: 'Re-transcribe With Backup Model',
+  retranscribeBackup: 'Re-transcribe With Backup Model'
 };
 
 
@@ -203,7 +209,7 @@ function normalizeShortcutBindings(inputBindings) {
   const normalized = {
     transcribe: sanitizeShortcut(inputBindings?.transcribe, DEFAULT_SHORTCUTS.transcribe),
     stopTranscribing: sanitizeShortcut(inputBindings?.stopTranscribing, DEFAULT_SHORTCUTS.stopTranscribing),
-    retranscribeBackup: sanitizeShortcut(inputBindings?.retranscribeBackup, DEFAULT_SHORTCUTS.retranscribeBackup),
+    retranscribeBackup: sanitizeShortcut(inputBindings?.retranscribeBackup, DEFAULT_SHORTCUTS.retranscribeBackup)
   };
   let hadConflict = false;
 
@@ -327,7 +333,7 @@ document.addEventListener('keydown', (event) => {
     const [conflictKey] = conflictEntry;
     setShortcutStatus(
       `${formatShortcutLabel(shortcut)} is already used by ${shortcutLabelMap[conflictKey] || conflictKey}.`,
-      true,
+      true
     );
     return;
   }
@@ -335,7 +341,7 @@ document.addEventListener('keydown', (event) => {
   shortcutBindings[activeShortcutCapture] = shortcut;
   setShortcutStatus(
     `${shortcutLabelMap[activeShortcutCapture] || 'Shortcut'} set to ${formatShortcutLabel(shortcut)}.`,
-    false,
+    false
   );
   cancelShortcutCapture();
 });
@@ -429,6 +435,92 @@ async function refreshMicrophones(preferredId = selectedMicrophoneId) {
       refreshMicrophonesButton.disabled = false;
     }
   }
+}
+
+// --- Audio Sources ---
+async function refreshAudioSources() {
+  if (!window.settingsAPI || typeof window.settingsAPI.getAudioSources !== 'function') {
+    // Fallback: use existing microphone list
+    return;
+  }
+  try {
+    const result = await window.settingsAPI.getAudioSources();
+    if (result && result.success && Array.isArray(result.sources)) {
+      availableAudioDevices = result.sources;
+      renderAudioSources();
+    }
+  } catch (error) {
+    console.error('[Settings] Error fetching audio sources:', error);
+  }
+}
+
+function renderAudioSources() {
+  if (!audioSourcesList) return;
+  audioSourcesList.innerHTML = '';
+
+  audioSourcesState.forEach((source, index) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: center; margin-bottom: 8px; padding: 10px; background: #f2f2f4; border-radius: 8px;';
+
+    // Device dropdown
+    const deviceSelect = document.createElement('select');
+    deviceSelect.className = 'microphone-select';
+    deviceSelect.style.cssText = 'min-width: 180px; font-size: 14px;';
+
+    const defaultOpt = document.createElement('option');
+    defaultOpt.value = 'default';
+    defaultOpt.textContent = 'Default';
+    deviceSelect.appendChild(defaultOpt);
+
+    availableAudioDevices.forEach((device) => {
+      const opt = document.createElement('option');
+      opt.value = device.id;
+      opt.textContent = device.name + (device.type === 'loopback' ? ' (Loopback)' : '');
+      deviceSelect.appendChild(opt);
+    });
+    deviceSelect.value = source.deviceId || 'default';
+    deviceSelect.addEventListener('change', () => {
+      audioSourcesState[index].deviceId = deviceSelect.value;
+    });
+    row.appendChild(deviceSelect);
+
+    // Speaker name input
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.placeholder = 'Speaker name (e.g., Doctor)';
+    nameInput.value = source.speakerName || '';
+    nameInput.style.cssText = 'padding: 8px 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; width: 100%; box-sizing: border-box;';
+    nameInput.addEventListener('input', () => {
+      audioSourcesState[index].speakerName = nameInput.value;
+    });
+    row.appendChild(nameInput);
+
+    // Remove button (only show if more than 1 source)
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.textContent = '\u00d7';
+    removeBtn.title = 'Remove this audio source';
+    removeBtn.style.cssText = 'width: 32px; height: 32px; border: none; border-radius: 999px; background: #ff3b30; color: white; font-size: 18px; cursor: pointer; padding: 0; line-height: 1;';
+    if (audioSourcesState.length <= 1) {
+      removeBtn.style.visibility = 'hidden';
+    }
+    removeBtn.addEventListener('click', () => {
+      if (audioSourcesState.length > 1) {
+        audioSourcesState.splice(index, 1);
+        renderAudioSources();
+      }
+    });
+    row.appendChild(removeBtn);
+
+    audioSourcesList.appendChild(row);
+  });
+}
+
+if (addAudioSourceButton) {
+  addAudioSourceButton.addEventListener('click', () => {
+    audioSourcesState.push({ deviceId: 'default', speakerName: '' });
+    renderAudioSources();
+  });
 }
 
 // --- Model Population ---
@@ -531,7 +623,7 @@ async function loadAndPopulateSettings() {
     const loadedShortcutBindings = {
       transcribe: sanitizeShortcut(settings.transcribeShortcut, DEFAULT_SHORTCUTS.transcribe),
       stopTranscribing: sanitizeShortcut(settings.stopTranscribingShortcut, DEFAULT_SHORTCUTS.stopTranscribing),
-      retranscribeBackup: sanitizeShortcut(settings.retranscribeBackupShortcut, DEFAULT_SHORTCUTS.retranscribeBackup),
+      retranscribeBackup: sanitizeShortcut(settings.retranscribeBackupShortcut, DEFAULT_SHORTCUTS.retranscribeBackup)
     };
     const normalizedShortcutState = normalizeShortcutBindings(loadedShortcutBindings);
     shortcutBindings = normalizedShortcutState.bindings;
@@ -539,6 +631,12 @@ async function loadAndPopulateSettings() {
     if (normalizedShortcutState.hadConflict) {
       setShortcutStatus('Duplicate shortcut settings were detected and auto-corrected. Save to keep changes.', true);
     }
+    if (Array.isArray(settings.audioSources)) {
+      audioSourcesState = settings.audioSources;
+    }
+    renderAudioSources();
+    refreshAudioSources();
+
     await refreshMicrophones(selectedMicrophoneId);
 
     // Populate ASR model dropdown
@@ -661,7 +759,8 @@ if (saveDictationButton) {
       selectedMicrophoneId: selectedMicrophoneId || 'default',
       transcribeShortcut: shortcutBindings.transcribe,
       stopTranscribingShortcut: shortcutBindings.stopTranscribing,
-      retranscribeBackupShortcut: shortcutBindings.retranscribeBackup
+      retranscribeBackupShortcut: shortcutBindings.retranscribeBackup,
+      audioSources: audioSourcesState
     };
 
     console.log('DEBUG: Saving dictation settings:', payload);
@@ -734,7 +833,7 @@ function renderMedicationAutoLearnSummary(summary) {
   const rendered = [
     `Last run: ${formatRunTimestamp(summary.lastRunAt)} (${runReason})`,
     `Scanned ${scanned} records, imported ${imported}, queued ${queued}, pending ${pending}`,
-    `Duration: ${durationMs} ms`,
+    `Duration: ${durationMs} ms`
   ];
   if (summary.error) {
     rendered.push(`Error: ${summary.error}`);

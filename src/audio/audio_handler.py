@@ -1,61 +1,14 @@
 # Make imports conditional for CI compatibility
 try:
-    import pyaudio
-    PYAUDIO_AVAILABLE = True
+    import sounddevice as sd
+    SOUNDDEVICE_AVAILABLE = True
 except ImportError:
-    PYAUDIO_AVAILABLE = False
-    print("[WARN] pyaudio not available in audio_handler.py - using mock")
-    class MockPyAudio:
-        paInt16 = "paInt16"
-        paInputOverflowed = -9981
-        paDeviceUnavailable = -9985
-        paStreamIsStopped = -9983
-        
-        class PyAudio:
-            def open(self, **kwargs):
-                return MockStream()
-            
-            def terminate(self):
-                pass
-                
-            def get_device_count(self):
-                return 1
-                
-            def get_device_info_by_index(self, index):
-                return {
-                    'name': 'Mock Audio Device',
-                    'maxInputChannels': 2,
-                    'defaultSampleRate': 44100.0
-                }
-                
-            def get_default_input_device_info(self):
-                return {
-                    'name': 'Mock Default Input',
-                    'maxInputChannels': 2,
-                    'defaultSampleRate': 44100.0,
-                    'index': 0
-                }
-        
-        def __init__(self):
-            pass
-    
-    class MockStream:
-        def is_active(self):
-            return False
-        
-        def stop_stream(self):
-            pass
-        
-        def close(self):
-            pass
-            
-        def read(self, frames, exception_on_overflow=True):
-            return b'\x00' * (frames * 2)  # Mock audio data
-            
-        def start_stream(self):
-            pass
-    
-    pyaudio = MockPyAudio()
+    SOUNDDEVICE_AVAILABLE = False
+    sd = None
+    print("[WARN] sounddevice not available in audio_handler.py - using mock")
+
+# Backward-compat shim: existing code references PYAUDIO_AVAILABLE in various places
+PYAUDIO_AVAILABLE = SOUNDDEVICE_AVAILABLE
 
 try:
     import webrtcvad
@@ -158,6 +111,7 @@ from src.performance_optimizer import start_perf_timer, end_perf_timer
 from src.config import config
 from src.config.settings_manager import settings_manager
 from src.audio.handy_visualizer import HandyAudioVisualizer
+from src.audio.audio_source import AudioSource
 from src import ipc_contract
 
 
@@ -224,12 +178,14 @@ class AudioHandler:
         self._auto_stop_on_silence = bool(
             settings_manager.get_setting("autoStopOnSilence", True)
         )
-        self._audio_format = pyaudio.paInt16
         self._channels = config.CHANNELS
         self._wake_word_enabled = True
 
+        # Multi-source audio capture
+        self._audio_sources = []  # List[AudioSource] for multi-source dictation
+
         # Check if we're in CI environment (missing key dependencies)
-        if not PYAUDIO_AVAILABLE or not WEBRTCVAD_AVAILABLE or not VOSK_AVAILABLE:
+        if not SOUNDDEVICE_AVAILABLE or not WEBRTCVAD_AVAILABLE or not VOSK_AVAILABLE:
             self._log_status("Audio handler initialized in CI mode - dependencies mocked", "orange")
             # Set up mock components
             self._vad = webrtcvad.Vad(config.VAD_AGGRESSIVENESS)
@@ -237,7 +193,6 @@ class AudioHandler:
             self._recognizer = None
             self._vosk_ready_event = threading.Event()
             self._model_lock = threading.Lock()
-            self._p = pyaudio.PyAudio() if PYAUDIO_AVAILABLE else pyaudio
             self._stream = None
         else:
             # VAD setup
@@ -249,8 +204,7 @@ class AudioHandler:
             self._vosk_ready_event = threading.Event()
             self._model_lock = threading.Lock()
 
-            # PyAudio setup
-            self._p = pyaudio.PyAudio()
+            # sounddevice stream (replaces PyAudio)
             self._stream = None
 
         # Buffering
@@ -370,25 +324,41 @@ class AudioHandler:
 
     def _resolve_selected_input_device(self):
         """
-        Resolve selected input device preference.
-        Returns: (device_index_or_none, device_info_or_none)
+        Resolve selected input device preference using sounddevice.
+        Returns: (device_index_or_none, device_info_dict_or_none)
         """
+        if not SOUNDDEVICE_AVAILABLE:
+            return None, None
+
         preference = (self._input_device_preference or "default").strip().lower()
         if preference in ("", "default", "system"):
             try:
-                default_device = self._p.get_default_input_device_info()
-                return None, default_device
+                default_idx = sd.default.device[0]
+                if default_idx is not None and default_idx >= 0:
+                    info = sd.query_devices(default_idx)
+                    return None, self._sd_device_to_dict(default_idx, info)
+                return None, None
             except Exception:
                 return None, None
 
         try:
             device_index = int(preference)
-            info = self._p.get_device_info_by_index(device_index)
-            if int(info.get("maxInputChannels", 0)) <= 0:
+            info = sd.query_devices(device_index)
+            if int(info.get("max_input_channels", 0)) <= 0:
                 return None, None
-            return device_index, info
+            return device_index, self._sd_device_to_dict(device_index, info)
         except Exception:
             return None, None
+
+    @staticmethod
+    def _sd_device_to_dict(index, info):
+        """Convert a sounddevice device info dict to the format expected by the rest of the code."""
+        return {
+            "name": info.get("name", f"Device {index}"),
+            "maxInputChannels": int(info.get("max_input_channels", 0)),
+            "defaultSampleRate": float(info.get("default_samplerate", 44100)),
+            "index": index,
+        }
 
     def _build_candidate_sample_rates(self, device_info=None):
         """Build preferred sample rates for opening input streams."""
@@ -440,7 +410,10 @@ class AudioHandler:
         return resampled.tobytes()
 
     def _open_audio_stream(self):
-        """Open a PyAudio input stream using selected microphone preference."""
+        """Open a sounddevice InputStream using selected microphone preference."""
+        if not SOUNDDEVICE_AVAILABLE:
+            raise RuntimeError("sounddevice not available")
+
         device_index, device_info = self._resolve_selected_input_device()
         if device_info is None:
             raise RuntimeError("Selected microphone device could not be resolved.")
@@ -455,19 +428,15 @@ class AudioHandler:
             if candidate_frame_size <= 0:
                 continue
 
-            open_kwargs = {
-                "format": self._audio_format,
-                "channels": channel_count,
-                "rate": candidate_rate,
-                "input": True,
-                "frames_per_buffer": candidate_frame_size,
-            }
-            if device_index is not None:
-                open_kwargs["input_device_index"] = device_index
-
             try:
-                stream = self._p.open(**open_kwargs)
-                stream.start_stream()
+                stream = sd.RawInputStream(
+                    device=device_index,
+                    samplerate=candidate_rate,
+                    channels=channel_count,
+                    dtype=config.AUDIO_DTYPE,
+                    blocksize=candidate_frame_size,
+                )
+                stream.start()
                 self._stream_sample_rate = candidate_rate
                 self._stream_frame_size = candidate_frame_size
                 self._last_stream_device_signature = self._device_signature(
@@ -488,14 +457,16 @@ class AudioHandler:
         raise RuntimeError("Failed to open audio stream with any supported sample rate.")
 
     def _close_stream(self, stream=None):
-        """Safely stop and close a PyAudio stream."""
+        """Safely stop and close an audio stream."""
         target_stream = self._stream if stream is None else stream
         if not target_stream:
             return
 
         try:
-            if hasattr(target_stream, "is_active") and target_stream.is_active():
-                target_stream.stop_stream()
+            if hasattr(target_stream, "active") and target_stream.active:
+                target_stream.stop()
+            elif hasattr(target_stream, "is_active") and target_stream.is_active():
+                target_stream.stop()
         except Exception:
             pass
 
@@ -508,18 +479,11 @@ class AudioHandler:
             self._stream = None
 
     def _recreate_pyaudio_backend(self):
-        """Recreate the PyAudio backend to recover from route churn."""
-        if not PYAUDIO_AVAILABLE:
-            return
+        """No-op: sounddevice does not require backend recreation.
 
-        current_backend = getattr(self, "_p", None)
-        if current_backend and hasattr(current_backend, "terminate"):
-            try:
-                current_backend.terminate()
-            except Exception:
-                pass
-
-        self._p = pyaudio.PyAudio()
+        Kept for API compatibility with stream recovery code paths.
+        """
+        pass
 
     def _device_signature(self, device_index, device_info):
         """Build a comparable description of the currently selected device."""
@@ -609,13 +573,6 @@ class AudioHandler:
 
     def _is_recoverable_stream_error(self, error) -> bool:
         """Return True when a stream error is likely due to device churn."""
-        error_no = getattr(error, "errno", None)
-        if error_no in {
-            getattr(pyaudio, "paDeviceUnavailable", -9985),
-            getattr(pyaudio, "paStreamIsStopped", -9983),
-        }:
-            return True
-
         error_text = str(error).lower()
         recoverable_patterns = [
             "device unavailable",
@@ -626,6 +583,7 @@ class AudioHandler:
             "stream not open",
             "invalid input device",
             "unanticipated host error",
+            "portaudio",
         ]
         return any(pattern in error_text for pattern in recoverable_patterns)
 
@@ -778,7 +736,11 @@ class AudioHandler:
         self._last_route_poll_time = now
 
         try:
-            default_info = self._p.get_default_input_device_info()
+            default_idx = sd.default.device[0] if SOUNDDEVICE_AVAILABLE else None
+            if default_idx is None or default_idx < 0:
+                return
+            raw_info = sd.query_devices(default_idx)
+            default_info = self._sd_device_to_dict(default_idx, raw_info)
         except Exception as error:
             log_text(
                 "AUDIO_ROUTE_POLL",
@@ -828,39 +790,58 @@ class AudioHandler:
 
     def list_input_devices(self):
         """Return available input devices for settings UI."""
-        if not PYAUDIO_AVAILABLE:
+        if not SOUNDDEVICE_AVAILABLE:
             return [{"id": "default", "name": "Default", "isDefault": True}]
 
-        devices = []
-        default_index = None
+        devices = [{"id": "default", "name": "Default", "isDefault": True}]
+        default_input_idx = None
         try:
-            default_info = self._p.get_default_input_device_info()
-            default_index = int(default_info.get("index", -1))
+            default_input_idx = sd.default.device[0]
         except Exception:
-            default_index = None
+            pass
 
-        devices.append({"id": "default", "name": "Default", "isDefault": True})
         try:
-            device_count = int(self._p.get_device_count())
+            all_devices = sd.query_devices()
         except Exception:
-            device_count = 0
+            return devices
 
-        for idx in range(device_count):
-            try:
-                info = self._p.get_device_info_by_index(idx)
-                if int(info.get("maxInputChannels", 0)) <= 0:
-                    continue
-                devices.append(
-                    {
-                        "id": str(idx),
-                        "name": info.get("name", f"Input {idx}"),
-                        "isDefault": idx == default_index,
-                    }
-                )
-            except Exception:
+        for idx, info in enumerate(all_devices):
+            if int(info.get("max_input_channels", 0)) <= 0:
                 continue
+            devices.append(
+                {
+                    "id": str(idx),
+                    "name": info.get("name", f"Input {idx}"),
+                    "isDefault": idx == default_input_idx,
+                }
+            )
 
         return devices
+
+    def list_audio_sources(self):
+        """Return available audio sources including loopback devices for multi-source UI."""
+        if not SOUNDDEVICE_AVAILABLE:
+            return [{"id": "default", "name": "Default", "type": "input"}]
+
+        sources = [{"id": "default", "name": "Default", "type": "input"}]
+        try:
+            all_devices = sd.query_devices()
+        except Exception:
+            return sources
+
+        for idx, d in enumerate(all_devices):
+            if int(d.get("max_input_channels", 0)) > 0:
+                sources.append({"id": str(idx), "name": d.get("name", f"Input {idx}"), "type": "input"})
+            # Windows WASAPI: output devices can be used as loopback
+            if sys.platform == "win32" and int(d.get("max_output_channels", 0)) > 0:
+                sources.append({"id": f"loopback:{idx}", "name": f"{d.get('name', f'Output {idx}')} (Loopback)", "type": "loopback"})
+            # Linux: PulseAudio monitor sources appear as input devices with "monitor" in name
+            if sys.platform.startswith("linux") and "monitor" in d.get("name", "").lower():
+                # Already added as input above, just tag it
+                if sources and sources[-1]["id"] == str(idx):
+                    sources[-1]["type"] = "loopback"
+
+        return sources
 
     def set_input_device_preference(self, device_id):
         """Set preferred microphone device id and switch stream live when possible."""
@@ -924,7 +905,7 @@ class AudioHandler:
                 # If audio stream is open and we are in 'preparing', switch to 'activation'
                 if (
                     self._stream
-                    and self._stream.is_active()
+                    and getattr(self._stream, "active", False)
                     and self._listening_state == "preparing"
                 ):
                     print(
@@ -1090,21 +1071,11 @@ class AudioHandler:
             vosk_thread.start()
 
         except Exception as e:
-            # Enhanced error handling with specific PyAudio error detection
             error_message = str(e)
             detailed_message = f"Error opening audio stream: {error_message}"
-            
-            # Classify the error for better user feedback
-            if hasattr(e, 'errno'):
-                if e.errno == getattr(pyaudio, 'paDeviceUnavailable', -9985):
-                    detailed_message = "Microphone device is currently unavailable (may be in use by another application)"
-                elif e.errno == getattr(pyaudio, 'paInputOverflowed', -9981):
-                    detailed_message = "Audio input buffer overflow (system too busy)"
-                elif e.errno == getattr(pyaudio, 'paStreamIsStopped', -9983):
-                    detailed_message = "Audio stream failed to start properly"
-            
+
             # Check for common error patterns
-            if "Device unavailable" in error_message:
+            if "Device unavailable" in error_message or "device unavailable" in error_message.lower():
                 # Now check for conflicts to provide specific guidance
                 conflict_info = self._check_for_audio_conflicts()
                 if conflict_info:
@@ -1153,15 +1124,12 @@ class AudioHandler:
                     f"Error stopping audio stream: {e}",
                 )
 
-        # Terminate PyAudio
-        if hasattr(self, "_p") and self._p:
+        # Stop multi-source audio sources
+        for source in getattr(self, "_audio_sources", []):
             try:
-                self._p.terminate()
+                source.stop()
             except Exception as e:
-                log_text(
-                    "AUDIO_TERMINATE_ERROR",
-                    f"Error terminating PyAudio: {e}",
-                )
+                log_text("AUDIO_STOP_ERROR", f"Error stopping audio source: {e}")
 
         # Clean up Vosk model and recognizer with thread safety
         with self._model_lock:
@@ -1215,11 +1183,90 @@ class AudioHandler:
         self.set_listening_state("inactive")  # Ensure state is inactive
 
     def terminate_pyaudio(self):
-        """Explicitly terminate PyAudio. Call this on application exit."""
-        if self._p:
-            self._p.terminate()
-            self._log_status("PyAudio terminated.", "green")
-            self._p = None
+        """No-op: sounddevice does not require explicit termination.
+
+        Kept for API compatibility with main.py shutdown.
+        """
+        pass
+
+    # ------------------------------------------------------------------
+    # Multi-source audio configuration
+    # ------------------------------------------------------------------
+
+    def configure_sources(self, source_configs):
+        """Configure multiple audio sources for multi-speaker dictation.
+
+        Args:
+            source_configs: list of dicts, e.g.
+                [{"deviceId": "default", "speakerName": "Doctor"},
+                 {"deviceId": "loopback:3", "speakerName": "Patient"}]
+
+        A single entry with empty speakerName behaves like legacy single-mic mode.
+        """
+        # Stop any existing extra sources
+        for source in self._audio_sources:
+            source.stop()
+        self._audio_sources = []
+
+        if not source_configs or len(source_configs) <= 1:
+            # Single source or empty — use the legacy single-stream path.
+            if source_configs and len(source_configs) == 1:
+                cfg = source_configs[0]
+                device_id = cfg.get("deviceId", "default")
+                self.set_input_device_preference(device_id)
+            return
+
+        # Multi-source mode: create AudioSource instances for each config
+        for cfg in source_configs:
+            device_id = cfg.get("deviceId", "default")
+            speaker_name = cfg.get("speakerName", "")
+            source_type = "loopback" if isinstance(device_id, str) and device_id.startswith("loopback:") else "input"
+
+            # Resolve device name
+            device_name = device_id
+            if SOUNDDEVICE_AVAILABLE and device_id not in (None, "", "default"):
+                try:
+                    idx = int(device_id.split(":")[-1]) if ":" in device_id else int(device_id)
+                    info = sd.query_devices(idx)
+                    device_name = info.get("name", device_id)
+                except Exception:
+                    pass
+
+            source = AudioSource(
+                device_id=device_id,
+                device_name=device_name,
+                speaker_name=speaker_name,
+                sample_rate=self._sample_rate,
+                on_speech_end=self._handle_source_speech_end,
+                on_status_update=self.on_status_update,
+                source_type=source_type,
+            )
+            source.set_auto_stop_on_silence(self._auto_stop_on_silence)
+            self._audio_sources.append(source)
+
+        log_text("AUDIO_HANDLER", f"Configured {len(self._audio_sources)} audio sources")
+
+    def _handle_source_speech_end(self, audio_data, speaker_name):
+        """Called by AudioSource instances when speech ends on any source."""
+        if self.on_speech_end:
+            self.on_speech_end(audio_data, speaker_name=speaker_name)
+
+    def start_multi_source_dictation(self):
+        """Start all configured audio sources for multi-source dictation."""
+        for source in self._audio_sources:
+            source.begin_dictation()
+            if not source.is_active:
+                source.start()
+
+    def stop_multi_source_dictation(self):
+        """Stop all audio sources and process remaining audio."""
+        for source in self._audio_sources:
+            source.end_dictation()
+
+    @property
+    def is_multi_source(self):
+        """Return True if multiple audio sources are configured."""
+        return len(self._audio_sources) > 1
 
     def set_program_active(self, active: bool):
         """Sets the overall program active state, affecting audio processing."""
@@ -1270,6 +1317,9 @@ class AudioHandler:
             self._log_status("Listening for activation words...", "blue")
         elif state == "dictation":
             self._log_status("Listening for dictation...", "green")
+            # Start multi-source capture if configured
+            if self._audio_sources:
+                self.start_multi_source_dictation()
         elif state == "processing":
             self._log_status("Processing audio...", "orange")
         elif state == "inactive":
@@ -1787,6 +1837,7 @@ class AudioHandler:
         self._reset_buffering()
 
         if self.on_speech_end and audio_data.size > 0:
+            # Single-source primary stream has no speaker name
             self.on_speech_end(audio_data)
         else:
             # Return to activation if no callback or no data
@@ -1829,7 +1880,7 @@ class AudioHandler:
                 except Exception as switch_error:
                     self._log_status(f"Failed to switch microphone: {switch_error}", "red")
 
-            if not self._stream or not self._stream.is_active():
+            if not self._stream or not getattr(self._stream, "active", False):
                 self._schedule_stream_recovery(
                     "stream_inactive",
                     "Audio input became unavailable. Reconnecting microphone...",
@@ -1839,7 +1890,8 @@ class AudioHandler:
                 continue
 
             try:
-                data = self._stream.read(self._stream_frame_size, exception_on_overflow=False)
+                raw_data, overflowed = self._stream.read(self._stream_frame_size)
+                data = bytes(raw_data)
                 processed_data = self._resample_frame_to_processing_rate(data)
                 
                 # Check for empty or problematic data reads
@@ -1895,8 +1947,7 @@ class AudioHandler:
 
             except IOError as e:
                 # This can happen if the input device changes or has issues
-                if e.errno == pyaudio.paInputOverflowed:
-                    # print("Input overflowed. Skipping frame.") # Debug log
+                if "overflow" in str(e).lower():
                     pass  # Ignore overflow, continue reading
                 else:
                     if self._is_recoverable_stream_error(e):
@@ -1928,30 +1979,24 @@ class AudioHandler:
             skip_test_stream: If True, skips opening a test audio stream to prevent macOS indicator flashing
         Returns a tuple of (is_available: bool, detailed_message: str, status_color: str)
         """
-        if not PYAUDIO_AVAILABLE:
-            return False, "PyAudio not available (CI environment)", "orange"
-            
+        if not SOUNDDEVICE_AVAILABLE:
+            return False, "sounddevice not available (CI environment)", "orange"
+
         try:
             selected_device_index, selected_device_info = self._resolve_selected_input_device()
             if selected_device_info is None:
-                try:
-                    selected_device_info = self._p.get_default_input_device_info()
-                    selected_device_index = None
-                except OSError as e:
-                    return False, f"No default input device found: {str(e)}", "red"
+                return False, "No default input device found", "red"
 
-            # Get device info for detailed error reporting
             device_name = selected_device_info.get('name', 'Unknown Device')
             max_channels = selected_device_info.get('maxInputChannels', 0)
-            
+
             if max_channels == 0:
                 return False, f"Device '{device_name}' has no input channels", "red"
-            
-            # Skip test stream during startup to prevent macOS microphone indicator flashing
+
             if skip_test_stream:
                 return True, f"Microphone '{device_name}' is available", "green"
-            
-            # Try to open a test stream to check for actual conflicts
+
+            # Try to open a test stream
             test_stream = None
             candidate_rates = self._build_candidate_sample_rates(selected_device_info)
             last_error = None
@@ -1961,22 +2006,20 @@ class AudioHandler:
                     if candidate_frame_size <= 0:
                         continue
                     try:
-                        test_stream = self._p.open(
-                            format=self._audio_format,
+                        test_stream = sd.RawInputStream(
+                            device=selected_device_index,
+                            samplerate=candidate_rate,
                             channels=min(self._channels, max_channels),
-                            rate=candidate_rate,
-                            input=True,
-                            frames_per_buffer=candidate_frame_size,
-                            start=False,  # Don't start immediately
-                            **({"input_device_index": selected_device_index} if selected_device_index is not None else {}),
+                            dtype=config.AUDIO_DTYPE,
+                            blocksize=candidate_frame_size,
                         )
-                        test_stream.start_stream()
-                        test_data = test_stream.read(candidate_frame_size, exception_on_overflow=False)
-                        test_stream.stop_stream()
+                        test_stream.start()
+                        test_data, _ = test_stream.read(candidate_frame_size)
+                        test_stream.stop()
                         test_stream.close()
                         test_stream = None
 
-                        if len(test_data) == 0:
+                        if len(bytes(test_data)) == 0:
                             continue
                         if candidate_rate != self._sample_rate:
                             return True, (
@@ -1988,11 +2031,6 @@ class AudioHandler:
                         last_error = candidate_error
                         if test_stream:
                             try:
-                                if hasattr(test_stream, 'is_active') and test_stream.is_active():
-                                    test_stream.stop_stream()
-                            except Exception:
-                                pass
-                            try:
                                 test_stream.close()
                             except Exception:
                                 pass
@@ -2002,38 +2040,27 @@ class AudioHandler:
                 if last_error is not None:
                     raise last_error
                 return False, f"Device '{device_name}' returned no audio data", "orange"
-                
-            except OSError as e:
+
+            except Exception as e:
                 error_msg = str(e).lower()
-                
-                # Detect specific error types
                 if "device unavailable" in error_msg or "usbmuxd" in error_msg:
-                    # Check for conflicts to provide better error message
                     conflict_info = self._check_for_audio_conflicts()
                     if conflict_info:
                         return False, f"Device '{device_name}' is unavailable - {conflict_info}", "orange"
-                    else:
-                        return False, f"Device '{device_name}' is unavailable (may be in use by another app)", "orange"
+                    return False, f"Device '{device_name}' is unavailable (may be in use by another app)", "orange"
                 elif "permission" in error_msg or "access" in error_msg:
-                    return False, f"Permission denied for microphone access", "red"
+                    return False, "Permission denied for microphone access", "red"
                 elif "sample rate" in error_msg or "format" in error_msg:
                     return False, f"Audio format not supported by '{device_name}'", "orange"
-                else:
-                    return False, f"Audio device error: {str(e)}", "red"
-                    
-            except Exception as e:
-                return False, f"Unexpected microphone error: {str(e)}", "red"
-                
+                return False, f"Audio device error: {str(e)}", "red"
+
             finally:
-                # Ensure test stream is properly closed
                 if test_stream:
                     try:
-                        if hasattr(test_stream, 'is_active') and test_stream.is_active():
-                            test_stream.stop_stream()
                         test_stream.close()
                     except Exception:
                         pass
-                        
+
         except Exception as e:
             return False, f"Failed to check microphone: {str(e)}", "red"
     
@@ -2042,9 +2069,6 @@ class AudioHandler:
         Checks for common applications that might be using the microphone.
         Returns a string describing potential conflicts, or None if no conflicts detected.
         """
-        if not PYAUDIO_AVAILABLE:
-            return None
-            
         try:
             # Check for common audio-using applications on macOS
             if sys.platform == "darwin":

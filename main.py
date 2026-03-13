@@ -263,6 +263,10 @@ class Application:
         self._stdin_prefix_handlers: Tuple[Tuple[str, Callable[[str], bool]], ...] = ()
         self._initialize_stdin_dispatch()
 
+        # Audio source level emitter (for per-source VU meters in the frontend)
+        self._source_levels_stop_event = threading.Event()
+        self._source_levels_thread: Optional[threading.Thread] = None
+
         # --- Initial Setup ---
         self._handle_status_update("Application initializing...", "grey")
 
@@ -372,6 +376,13 @@ class Application:
             settings_manager.set_setting("selectedMicrophoneId", normalized_mic, save=False)
             self.audio_handler.set_input_device_preference(normalized_mic)
             log_text("CONFIG", f"Selected microphone set to: {normalized_mic}")
+
+        if "audioSources" in received_config:
+            audio_sources = received_config.get("audioSources", [])
+            if isinstance(audio_sources, list):
+                settings_manager.set_setting("audioSources", audio_sources, save=False)
+                self.audio_handler.configure_sources(audio_sources)
+                log_text("CONFIG", f"Audio sources configured: {len(audio_sources)} source(s)")
 
         for shortcut_key, default_value in (
             ("transcribeShortcut", "Option+Space"),
@@ -660,6 +671,7 @@ class Application:
 
     def shutdown(self):
         """Shuts down all components gracefully."""
+        self._stop_source_levels_emitter()
         self._handle_status_update("Shutting down...", "orange")
         try:
             print("SHUTDOWN_SIGNAL", flush=True)  # Signal Electron we are shutting down
@@ -714,6 +726,48 @@ class Application:
         self._handle_status_update(message, "grey")
         if summary.get("error"):
             log_text("MEDICATION_AUTOLEARN_ERROR", str(summary.get("error")))
+
+    # --- Audio Source Level Emitter ---
+
+    def _start_source_levels_emitter(self):
+        """Start the background thread that emits per-source audio levels at ~10Hz."""
+        if self._source_levels_thread and self._source_levels_thread.is_alive():
+            return
+        self._source_levels_stop_event.clear()
+        self._source_levels_thread = threading.Thread(
+            target=self._source_levels_loop,
+            name="source-levels-emitter",
+            daemon=True,
+        )
+        self._source_levels_thread.start()
+
+    def _stop_source_levels_emitter(self):
+        """Stop the audio source levels emitter thread."""
+        self._source_levels_stop_event.set()
+        self._source_levels_thread = None
+
+    def _source_levels_loop(self):
+        """Emit AUDIO_SOURCE_LEVELS messages every ~100ms while dictation is active."""
+        while not self._source_levels_stop_event.is_set():
+            try:
+                sources = getattr(self.audio_handler, "_audio_sources", [])
+                if sources:
+                    levels = []
+                    for src in sources:
+                        rms = src.last_rms if src.is_active else 0.0
+                        # Normalize RMS to 0..1 range (int16 max is 32768)
+                        normalized = min(1.0, rms / 8000.0)
+                        levels.append({
+                            "name": src.speaker_name or src.device_name,
+                            "level": round(normalized, 3),
+                        })
+                    print(
+                        ipc_contract.with_prefix("audioSourceLevels", levels),
+                        flush=True,
+                    )
+            except Exception as e:
+                log_text("SOURCE_LEVELS", f"Error emitting source levels: {e}")
+            self._source_levels_stop_event.wait(0.1)
 
     def _handle_status_update(self, message: str, color: str):
         """Receives status updates from handlers and prints them for Electron."""
@@ -839,6 +893,7 @@ class Application:
         )
         self.audio_handler.set_listening_state("dictation")
         self.hotkey_manager.set_dictating_state(True)  # <<< SET STATE TO TRUE
+        self._start_source_levels_emitter()
 
         # Update app state (will be printed by _update_app_state)
         log_text(
@@ -847,9 +902,11 @@ class Application:
         self._update_app_state()
         # Audio handler should already be in 'dictation' state from its own logic
 
-    def _handle_speech_end(self, audio_data):
+    def _handle_speech_end(self, audio_data, speaker_name=None):
         """Called by AudioHandler when speech ends after dictation starts."""
-        log_text("SPEECH_END", f"Received {len(audio_data)} audio samples.")
+        self._stop_source_levels_emitter()
+        speaker_label = f" (speaker: {speaker_name})" if speaker_name else ""
+        log_text("SPEECH_END", f"Received {len(audio_data)} audio samples.{speaker_label}")
         self.medication_autolearn_service.notify_activity()
         self._handle_status_update("Speech ended. Transcribing...", "orange")
         self._transition_lifecycle("transcribing", "speech_end", publish=True)
@@ -861,11 +918,12 @@ class Application:
         # Ensure the transcription handler uses the up-to-date selected ASR model
         # (If runtime changes happened via CONFIG, model resources are already prepared)
         self.transcription_handler.transcribe_audio_data(
-            audio_data, config.DEFAULT_WHISPER_PROMPT
+            audio_data, config.DEFAULT_WHISPER_PROMPT, speaker_name=speaker_name
         )
 
-    def _handle_transcription_complete(self, raw_text: str, duration: float):
+    def _handle_transcription_complete(self, raw_text: str, duration: float, speaker_name: str = None):
         """Called by TranscriptionHandler when transcription is complete."""
+        self._last_speaker_name = speaker_name
         log_event(
             "TRANSCRIPTION_COMPLETE",
             "transcription_received",
@@ -911,6 +969,8 @@ class Application:
             "model": getattr(self.transcription_handler, "selected_asr_model", None),
             "filterFillerWords": settings_manager.get_setting("filterFillerWords", True)
         }
+        if speaker_name:
+            history_metadata["speakerName"] = speaker_name
         history_entry_id = uuid.uuid4().hex
         self._last_history_entry_id = history_entry_id
         history_record = self.history_manager.add_entry(
@@ -934,7 +994,12 @@ class Application:
         # Send transcription to Electron BEFORE history entry so the frontend
         # finalizes the transcript (status → 'complete') before linking history.
         if processed_text:
-            print(ipc_contract.with_prefix("finalTranscript", processed_text), flush=True)
+            speaker = getattr(self, "_last_speaker_name", None)
+            if speaker:
+                transcript_payload = json.dumps({"text": processed_text, "speaker": speaker})
+                print(ipc_contract.with_prefix("finalTranscript", transcript_payload), flush=True)
+            else:
+                print(ipc_contract.with_prefix("finalTranscript", processed_text), flush=True)
             if session_outcome.get("suppressPaste"):
                 log_text(
                     "TRANSCRIPTION_COMPLETE",
@@ -1488,6 +1553,7 @@ class Application:
             ("VOCABULARY_API:", self._handle_vocabulary_api_command),
             ("ENSURE_MODEL:", self._handle_ensure_model_command),
             ("LIST_MICROPHONES:", self._handle_list_microphones_command),
+            ("GET_AUDIO_SOURCES:", self._handle_get_audio_sources_command),
             ("REPASTE:", self._handle_repaste_command),
             ("RETRANSCRIBE_AUDIO:", self._handle_retranscribe_audio_command),
             ("TRANSCRIBE_FILE:", self._handle_transcribe_file_command),
@@ -1655,6 +1721,22 @@ class Application:
 
         print(
             f"MICROPHONES_LIST:{request_id}:{json.dumps(response, ensure_ascii=False)}",
+            flush=True,
+        )
+        sys.stdout.flush()
+        return True
+
+    def _handle_get_audio_sources_command(self, command_line: str) -> bool:
+        parts = command_line.split(":", 1)
+        request_id = parts[1] if len(parts) > 1 else ""
+        try:
+            sources = self.audio_handler.list_audio_sources()
+            response = {"success": True, "sources": sources}
+        except Exception as source_error:
+            response = {"success": False, "error": str(source_error), "sources": []}
+
+        print(
+            f"AUDIO_SOURCES_LIST:{request_id}:{json.dumps(response, ensure_ascii=False)}",
             flush=True,
         )
         sys.stdout.flush()
@@ -1898,6 +1980,7 @@ class Application:
 
     def _trigger_stop_dictation(self):
         """Handles stop dictation command (process audio) from Electron or hotkey."""
+        self._stop_source_levels_emitter()
         log_text("COMMAND", "Stop Dictation (Process) requested.")
         current_audio_state = (
             self.audio_handler.get_listening_state()
@@ -1936,6 +2019,7 @@ class Application:
 
     def _trigger_abort_dictation(self):
         """Handles abort dictation command (discard audio) from Electron or hotkey."""
+        self._stop_source_levels_emitter()
         log_text("COMMAND", "Abort Dictation (Discard) requested.")
         self.audio_handler.abort_dictation()  # Call the new method in AudioHandler
         self.hotkey_manager.set_dictating_state(False)  # <<< SET STATE TO FALSE

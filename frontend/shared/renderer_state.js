@@ -247,53 +247,53 @@ export function updateStatusIndicator(newState) {
   setProcessingIndicatorState('Transcribing', false);
 
   switch (effectiveVisibleAudioState) {
-    case 'activation':
-    case 'preparing':
-      if (internalState.wakeWordEnabled) {
-        applyStatusDotVisuals('blue', 'listening');
-        setActivityPhase('listening', 'Listening');
-      } else {
-        applyStatusDotVisuals('grey', 'inactive');
-        setActivityPhase('inactive', 'Wake Word Off');
-      }
-      if (stopButton) stopButton.disabled = true;
-      if (cancelButton) cancelButton.disabled = true;
-      break;
-    case 'dictation':
-      applyStatusDotVisuals('green', 'dictation');
-      setActivityPhase('recording', 'Recording');
-      if (stopButton) stopButton.disabled = false;
-      if (cancelButton) cancelButton.disabled = false;
-      if (internalState.currentMode === 'dictate') {
-        setModeIndicatorState('Note', false);
-      }
-      break;
-    case 'processing':
-      applyStatusDotVisuals('orange', 'inactive');
-      setActivityPhase('transcribing', internalState.dictationLifecycle === 'inserting' ? 'Inserting' : 'Transcribing');
-      if (stopButton) stopButton.disabled = true;
-      if (cancelButton) cancelButton.disabled = true;
-      setProcessingIndicatorState(
-        internalState.dictationLifecycle === 'inserting' ? 'Inserting' : 'Transcribing',
-        true
-      );
-      break;
-    case 'error':
-      applyStatusDotVisuals('red', 'inactive');
-      setActivityPhase('error', 'Error');
-      if (stopButton) stopButton.disabled = true;
-      if (cancelButton) cancelButton.disabled = true;
-      setProcessingIndicatorState('Retry', false);
-      break;
-    case 'inactive':
-    default:
+  case 'activation':
+  case 'preparing':
+    if (internalState.wakeWordEnabled) {
+      applyStatusDotVisuals('blue', 'listening');
+      setActivityPhase('listening', 'Listening');
+    } else {
       applyStatusDotVisuals('grey', 'inactive');
-      setActivityPhase('inactive', 'Idle');
-      if (stopButton) stopButton.disabled = true;
-      if (cancelButton) cancelButton.disabled = true;
+      setActivityPhase('inactive', 'Wake Word Off');
+    }
+    if (stopButton) stopButton.disabled = true;
+    if (cancelButton) cancelButton.disabled = true;
+    break;
+  case 'dictation':
+    applyStatusDotVisuals('green', 'dictation');
+    setActivityPhase('recording', 'Recording');
+    if (stopButton) stopButton.disabled = false;
+    if (cancelButton) cancelButton.disabled = false;
+    if (internalState.currentMode === 'dictate') {
       setModeIndicatorState('Note', false);
-      setProcessingIndicatorState('Transcribing', false);
-      break;
+    }
+    break;
+  case 'processing':
+    applyStatusDotVisuals('orange', 'inactive');
+    setActivityPhase('transcribing', internalState.dictationLifecycle === 'inserting' ? 'Inserting' : 'Transcribing');
+    if (stopButton) stopButton.disabled = true;
+    if (cancelButton) cancelButton.disabled = true;
+    setProcessingIndicatorState(
+      internalState.dictationLifecycle === 'inserting' ? 'Inserting' : 'Transcribing',
+      true
+    );
+    break;
+  case 'error':
+    applyStatusDotVisuals('red', 'inactive');
+    setActivityPhase('error', 'Error');
+    if (stopButton) stopButton.disabled = true;
+    if (cancelButton) cancelButton.disabled = true;
+    setProcessingIndicatorState('Retry', false);
+    break;
+  case 'inactive':
+  default:
+    applyStatusDotVisuals('grey', 'inactive');
+    setActivityPhase('inactive', 'Idle');
+    if (stopButton) stopButton.disabled = true;
+    if (cancelButton) cancelButton.disabled = true;
+    setModeIndicatorState('Note', false);
+    setProcessingIndicatorState('Transcribing', false);
+    break;
   }
 
   updateWakeWordToggle(internalState.wakeWordEnabled, internalState.programActive);

@@ -18,7 +18,8 @@
     "retranscribeBackupShortcut",
     "openaiApiKey",
     "googleApiKey",
-    "fileTranscriptionDefaults"
+    "fileTranscriptionDefaults",
+    "audioSources"
   ],
   "electronDefaults": {
     "wakeWords": {
@@ -52,7 +53,8 @@
       "modelId": "openai:whisper-1",
       "diarization": false,
       "language": "en"
-    }
+    },
+    "audioSources": [{"deviceId": "default", "speakerName": ""}]
   },
   "pythonDefaults": {
     "programActive": true,
@@ -81,7 +83,8 @@
     "selectedMicrophoneId": "default",
     "transcribeShortcut": "Option+Space",
     "stopTranscribingShortcut": "Cmd+Shift+S",
-    "retranscribeBackupShortcut": "Ctrl+Option+R"
+    "retranscribeBackupShortcut": "Ctrl+Option+R",
+    "audioSources": [{"deviceId": "default", "speakerName": ""}]
   },
   "pythonConfigKeys": [
     "wakeWords",
@@ -95,7 +98,8 @@
     "stopTranscribingShortcut",
     "retranscribeBackupShortcut",
     "selectedAsrModel",
-    "secondaryAsrModel"
+    "secondaryAsrModel",
+    "audioSources"
   ],
   "pythonConfigOptionalStringKeys": [
     "selectedAsrModel",

@@ -121,26 +121,7 @@ except ImportError:
     AutoModelForCTC = None  # type: ignore
     hf_pipeline = None  # type: ignore
 
-try:
-    import pyaudio
-    PYAUDIO_AVAILABLE = True
-except ImportError:
-    PYAUDIO_AVAILABLE = False
-    try:
-        from src.config import config as _cfg
-        if not getattr(_cfg, "MINIMAL_TERMINAL_OUTPUT", False):
-            print("[WARN] pyaudio not available in transcription_handler.py - using mock")
-    except Exception:
-        print("[WARN] pyaudio not available in transcription_handler.py - using mock")
-    # Create mock pyaudio
-    class MockPyAudio:
-        paInt16 = "paInt16"
-        
-        @staticmethod
-        def get_sample_size(format):
-            return 2  # Default to 16-bit
-    
-    pyaudio = MockPyAudio()
+# pyaudio removed — sample width is now config.AUDIO_SAMPLE_WIDTH
 
 import json
 import platform
@@ -598,8 +579,12 @@ class TranscriptionHandler:
             try:
                 if item is None:
                     break
-                audio_data, prompt = item
-                self._transcribe_thread_worker(audio_data, prompt)
+                if len(item) == 3:
+                    audio_data, prompt, speaker_name = item
+                else:
+                    audio_data, prompt = item
+                    speaker_name = None
+                self._transcribe_thread_worker(audio_data, prompt, speaker_name)
             finally:
                 self._transcription_queue.task_done()
 
@@ -899,7 +884,7 @@ class TranscriptionHandler:
             with wave.open(filename, "wb") as wf:
                 wf.setnchannels(config.CHANNELS)
                 # Use pyaudio to get sample width based on the format defined in config
-                wf.setsampwidth(pyaudio.get_sample_size(config.AUDIO_FORMAT))
+                wf.setsampwidth(config.AUDIO_SAMPLE_WIDTH)
                 wf.setframerate(self._sample_rate)
                 wf.writeframes(audio_data.tobytes())
             # self._log_status(f"Temporary audio saved: {filename}", "grey") # Optional: Log file saving
@@ -953,7 +938,7 @@ class TranscriptionHandler:
         return kwargs
 
     def transcribe_audio_data(
-        self, audio_data, prompt: str = config.DEFAULT_WHISPER_PROMPT
+        self, audio_data, prompt: str = config.DEFAULT_WHISPER_PROMPT, speaker_name: str = None
     ):
         """
         Queue audio for transcription on the long-lived primary ASR worker.
@@ -961,6 +946,7 @@ class TranscriptionHandler:
         Args:
             audio_data: Numpy array containing the audio samples.
             prompt: The prompt to guide the transcription (used for Whisper models).
+            speaker_name: Optional speaker label for multi-source dictation.
         """
         # Handle mock numpy arrays in CI environment
         if not NUMPY_AVAILABLE and hasattr(audio_data, 'data'):
@@ -976,14 +962,14 @@ class TranscriptionHandler:
             # Safety fallback for tests that bypass __init__.
             thread = threading.Thread(
                 target=self._transcribe_thread_worker,
-                args=(audio_data, prompt),
+                args=(audio_data, prompt, speaker_name),
                 daemon=True,
             )
             thread.start()
             return
 
         try:
-            self._transcription_queue.put_nowait((audio_data, prompt))
+            self._transcription_queue.put_nowait((audio_data, prompt, speaker_name))
             queued_now = self._transcription_queue.qsize()
             if queued_now > 1:
                 self._log_status(
@@ -998,7 +984,7 @@ class TranscriptionHandler:
             if self.on_transcription_complete:
                 self.on_transcription_complete("", 0.0)
 
-    def _transcribe_thread_worker(self, audio_data, prompt: str):
+    def _transcribe_thread_worker(self, audio_data, prompt: str, speaker_name: str = None):
         """Worker function for the transcription thread."""
         self._log_status("Starting transcription process...", "blue")
         filename = None
@@ -1019,7 +1005,7 @@ class TranscriptionHandler:
                     model=self.selected_asr_model,
                 )
                 if self.on_transcription_complete:
-                    self.on_transcription_complete(raw_text, transcription_time)
+                    self.on_transcription_complete(raw_text, transcription_time, speaker_name=speaker_name)
                 return
 
             # 1. Save audio to a temporary file
@@ -1263,7 +1249,7 @@ class TranscriptionHandler:
             # 5. Call the completion callback (ensure it's thread-safe if it modifies GUI)
             if self.on_transcription_complete:
                 # The callback is handled by main.py which uses a queue, so it's safe.
-                self.on_transcription_complete(raw_text, transcription_time)
+                self.on_transcription_complete(raw_text, transcription_time, speaker_name=speaker_name)
 
     def _resolve_apple_speech_helper_app(self) -> str | None:
         override = os.getenv("CT_APPLE_SPEECH_HELPER", "").strip()
@@ -1559,7 +1545,7 @@ if __name__ == "__main__":
     #     f.write("    # with open(config.LOG_FILE, 'a', encoding='utf-8') as log_file:\n")
     #     f.write("    #     log_file.write(f'{timestamp} [{label}] {content}\\n')\n")
 
-    import pyaudio  # Needed for get_sample_size in _save_temp_audio
+    # pyaudio no longer needed — sample width from config.AUDIO_SAMPLE_WIDTH
 
     def transcription_done(text, duration):
         print("\n--- TRANSCRIPTION COMPLETE ---")

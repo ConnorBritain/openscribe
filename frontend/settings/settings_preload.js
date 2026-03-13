@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('settingsAPI', {
 
   listMicrophones: () => ipcRenderer.invoke('list-microphones'),
 
+  getAudioSources: () => ipcRenderer.invoke('audio:get-sources'),
+
   setHotkeysSuspended: (suspended) => ipcRenderer.invoke('set-hotkeys-suspended', !!suspended),
 
   // Function to call vocabulary API

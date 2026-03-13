@@ -44,7 +44,8 @@ function getHistorySummary() {
     durationSeconds: record.durationSeconds,
     metadata: record.metadata || {},
     audioAvailable: Boolean(record.audioFile),
-    transcriptPreview: (record.processedTranscript || record.transcript || '').slice(0, 600)
+    transcriptPreview: (record.processedTranscript || record.transcript || '').slice(0, 600),
+    speakerName: (record.metadata && record.metadata.speakerName) || null
   }));
 }
 

@@ -51,7 +51,7 @@ function createAppMenu({ createSettingsWindow, createHistoryWindow, createFileTr
             accelerator: 'CmdOrCtrl+,',
             click: () => createSettingsWindow()
           },
-          { type: 'separator' },
+          { type: 'separator' }
         ] : []),
         isMac ? { role: 'close' } : { role: 'quit' }
       ]
@@ -70,7 +70,7 @@ function createAppMenu({ createSettingsWindow, createHistoryWindow, createFileTr
         ...(isMac ? [
           { role: 'pasteAndMatchStyle' },
           { role: 'delete' },
-          { role: 'selectAll' },
+          { role: 'selectAll' }
         ] : [
           { role: 'delete' },
           { type: 'separator' },
@@ -136,7 +136,7 @@ function createAppMenu({ createSettingsWindow, createHistoryWindow, createFileTr
         },
         { type: 'separator' },
         ...(isMac ? [
-          { role: 'front' },
+          { role: 'front' }
         ] : [
           { role: 'close' }
         ])

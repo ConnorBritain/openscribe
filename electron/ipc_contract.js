@@ -16,7 +16,8 @@ const DEFAULT_PREFIXES = {
   retranscribeQuickResult: 'RETRANSCRIBE_QUICK_RESULT:',
   hotkeys: 'HOTKEYS:',
   transcribeFileProgress: 'TRANSCRIBE_FILE_PROGRESS:',
-  transcribeFileResult: 'TRANSCRIBE_FILE_RESULT:'
+  transcribeFileResult: 'TRANSCRIBE_FILE_RESULT:',
+  audioSourceLevels: 'AUDIO_SOURCE_LEVELS:'
 };
 
 const PREFIXES = Object.freeze({

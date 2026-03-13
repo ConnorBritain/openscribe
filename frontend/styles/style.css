@@ -1484,3 +1484,97 @@ body.ui-mode-handy #activity-pill.state-error #handy-processing-indicator {
 body.ui-mode-handy #activity-pill.state-recording .pill-cancel-button {
     display: inline-flex;
 }
+
+/* Per-source audio level VU meters */
+.audio-source-levels {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px 12px;
+    flex-shrink: 0;
+}
+
+.audio-source-level {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 16px;
+}
+
+.audio-source-level__name {
+    font-size: 11px;
+    color: #b0b8c8;
+    min-width: 72px;
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.audio-source-level__track {
+    flex: 1;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.audio-source-level__fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 3px;
+    background: #4dd37a;
+    transition: width 80ms ease-out;
+}
+
+.audio-source-level__fill.level-mid {
+    background: #ffb347;
+}
+
+.audio-source-level__fill.level-high {
+    background: #ff6b6b;
+}
+
+/* Hide in handy mode */
+body.ui-mode-handy .audio-source-levels {
+    display: none !important;
+}
+
+/* Speaker labels for multi-source dictation */
+.transcript-entry__speaker {
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-bottom: 4px;
+    color: #fff;
+    background: #007aff;
+}
+
+.transcript-entry__speaker[data-speaker]::before {
+    content: '';
+}
+
+/* Speaker color rotation */
+.transcript-entry__speaker:nth-of-type(1),
+.transcript-entry__speaker[data-speaker="Doctor"],
+.transcript-entry__speaker[data-speaker="doctor"] {
+    background: #007aff;
+}
+
+.transcript-entry__speaker[data-speaker="Patient"],
+.transcript-entry__speaker[data-speaker="patient"] {
+    background: #34c759;
+}
+
+.transcript-entry__speaker[data-speaker="Nurse"],
+.transcript-entry__speaker[data-speaker="nurse"] {
+    background: #ff9500;
+}
+
+.transcript-entry__speaker[data-speaker="Other"],
+.transcript-entry__speaker[data-speaker="other"] {
+    background: #8e8e93;
+}

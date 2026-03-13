@@ -24,6 +24,7 @@ _DEFAULT_CONTRACT = {
         "hotkeys": "HOTKEYS:",
         "transcribeFileProgress": "TRANSCRIBE_FILE_PROGRESS:",
         "transcribeFileResult": "TRANSCRIBE_FILE_RESULT:",
+        "audioSourceLevels": "AUDIO_SOURCE_LEVELS:",
     },
     "audioStates": ["inactive", "preparing", "activation", "dictation", "processing"],
     "lifecycleStates": [

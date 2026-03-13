@@ -17,7 +17,7 @@ function buildPythonConfigFromStore(store, options = {}) {
   const {
     overrides = {},
     includeSelectedAsrModel = true,
-    includeSecondaryAsrModel = true,
+    includeSecondaryAsrModel = true
   } = options;
 
   const payload = {};
@@ -49,10 +49,10 @@ function buildPythonConfigFromStore(store, options = {}) {
 
   return {
     ...payload,
-    ...overrides,
+    ...overrides
   };
 }
 
 module.exports = {
-  buildPythonConfigFromStore,
+  buildPythonConfigFromStore
 };

@@ -22,5 +22,5 @@ contextBridge.exposeInMainWorld('fileTranscribeAPI', {
   saveApiKey: (provider, value) => ipcRenderer.invoke('apikey:save', { provider, value }),
   deleteApiKey: (provider) => ipcRenderer.invoke('apikey:delete', { provider }),
   // Model management
-  ensureModel: (modelId) => ipcRenderer.invoke('ensure-model', modelId),
+  ensureModel: (modelId) => ipcRenderer.invoke('ensure-model', modelId)
 });

@@ -197,6 +197,14 @@ function buildTranscriptEntry(entry) {
   timestampEl.textContent = formatTimestamp(entry.updatedAt || entry.createdAt);
   header.appendChild(timestampEl);
 
+  if (entry.speaker) {
+    const speakerLabel = document.createElement('span');
+    speakerLabel.className = 'transcript-entry__speaker';
+    speakerLabel.textContent = entry.speaker;
+    speakerLabel.dataset.speaker = entry.speaker;
+    entryEl.appendChild(speakerLabel);
+  }
+
   const textBlock = document.createElement('div');
   textBlock.className = 'transcript-entry__text';
   textBlock.textContent = entry.text || (entry.status === 'recording' ? 'Capturing audio…' : '');
@@ -330,7 +338,7 @@ export function updateActiveTranscriptStatus(status) {
   renderTranscripts();
 }
 
-export function updateActiveTranscriptText(text, { finalize = false } = {}) {
+export function updateActiveTranscriptText(text, { finalize = false, speaker = null } = {}) {
   let entry = findTranscriptById(activeTranscriptId);
   if (!entry && transcripts.length === 0) {
     beginTranscriptSession();
@@ -346,6 +354,7 @@ export function updateActiveTranscriptText(text, { finalize = false } = {}) {
   }
 
   entry.text = text || '';
+  entry.speaker = speaker || entry.speaker;
   entry.updatedAt = new Date();
   if (finalize) {
     entry.status = 'complete';
@@ -372,8 +381,8 @@ export function updateActiveTranscriptText(text, { finalize = false } = {}) {
   }
 }
 
-export function finalizeActiveTranscript(text) {
-  updateActiveTranscriptText(text, { finalize: true });
+export function finalizeActiveTranscript(text, options = {}) {
+  updateActiveTranscriptText(text, { finalize: true, speaker: options.speaker || null });
 }
 
 export function resetTranscriptLog() {

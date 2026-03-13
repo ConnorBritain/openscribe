@@ -66,7 +66,7 @@ contextBridge.exposeInMainWorld('homeAPI', {
   openLiveDictation: () => ipcRenderer.send('home:open-live-dictation'),
   openFileTranscribe: () => ipcRenderer.send('home:open-file-transcribe'),
   openSettings: () => ipcRenderer.send('home:open-settings'),
-  getApiKeyStatus: () => ipcRenderer.invoke('apikey:status'),
+  getApiKeyStatus: () => ipcRenderer.invoke('apikey:status')
 });
 
 // File transcription API (used by filetranscribe.html when loaded in the main window)
@@ -92,14 +92,14 @@ contextBridge.exposeInMainWorld('fileTranscribeAPI', {
   saveApiKey: (provider, value) => ipcRenderer.invoke('apikey:save', { provider, value }),
   deleteApiKey: (provider) => ipcRenderer.invoke('apikey:delete', { provider }),
   // Model management
-  ensureModel: (modelId) => ipcRenderer.invoke('ensure-model', modelId),
+  ensureModel: (modelId) => ipcRenderer.invoke('ensure-model', modelId)
 });
 
 // Navigation API (available on all pages loaded in the main window)
 contextBridge.exposeInMainWorld('navAPI', {
   goHome: () => ipcRenderer.send('nav:go-home'),
   goLiveDictation: () => ipcRenderer.send('home:open-live-dictation'),
-  goFileTranscribe: () => ipcRenderer.send('home:open-file-transcribe'),
+  goFileTranscribe: () => ipcRenderer.send('home:open-file-transcribe')
 });
 
 console.log('Preload script loaded.');

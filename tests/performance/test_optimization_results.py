@@ -24,7 +24,7 @@ class TestPerformanceOptimizations(unittest.TestCase):
         """Test that audio buffer optimization prevents memory growth."""
         # Skip if audio dependencies not available
         try:
-            import pyaudio
+            import sounddevice
             import webrtcvad
             import numpy as np
         except ImportError:

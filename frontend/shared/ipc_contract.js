@@ -14,7 +14,8 @@ const DEFAULT_CONTRACT = {
     retranscribeStart: 'RETRANSCRIBE_START:',
     retranscribeEnd: 'RETRANSCRIBE_END:',
     retranscribeQuickResult: 'RETRANSCRIBE_QUICK_RESULT:',
-    hotkeys: 'HOTKEYS:'
+    hotkeys: 'HOTKEYS:',
+    audioSourceLevels: 'AUDIO_SOURCE_LEVELS:'
   },
   audioStates: ['inactive', 'preparing', 'activation', 'dictation', 'processing'],
   lifecycleStates: ['idle', 'listening', 'recording', 'stopping', 'transcribing', 'inserting', 'error']

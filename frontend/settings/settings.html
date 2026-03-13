@@ -427,6 +427,22 @@
                 </div>
             </div>
 
+            <h3 class="handy-section-title">AUDIO SOURCES</h3>
+            <div class="handy-card">
+                <div class="handy-row" style="flex-direction: column; align-items: flex-start; gap: 10px;">
+                    <div class="handy-row__label">
+                        <span>Audio Sources</span>
+                        <button class="info-tip" type="button"
+                            data-tip="Configure multiple audio inputs for multi-speaker dictation. Each source can be named for speaker identification in transcripts.">i</button>
+                    </div>
+                    <div id="audio-sources-list" style="width: 100%;">
+                        <!-- Audio source entries will be populated dynamically -->
+                    </div>
+                    <button id="add-audio-source-button" type="button" style="background: #34c759; color: white; border: none; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px;">+ Add Source</button>
+                    <small class="inline-muted">Add multiple audio inputs to capture both sides of a conversation. Name each source for speaker identification.</small>
+                </div>
+            </div>
+
             <div class="hidden-inputs">
                 <label for="wake-words-dictate-input">Dictation Wake Word(s):</label>
                 <input type="text" id="wake-words-dictate-input" placeholder="e.g., note, dictate">

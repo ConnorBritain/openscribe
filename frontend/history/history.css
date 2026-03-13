@@ -315,3 +315,39 @@ body {
 .secondary:hover {
     background: rgba(255, 255, 255, 0.15);
 }
+
+/* Speaker tags for history entries */
+.history-speaker-tag {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-top: 4px;
+    color: #fff;
+    background: #007aff;
+}
+
+.history-speaker-tag[data-speaker="Doctor"],
+.history-speaker-tag[data-speaker="doctor"] {
+    background: #007aff;
+}
+
+.history-speaker-tag[data-speaker="Patient"],
+.history-speaker-tag[data-speaker="patient"] {
+    background: #34c759;
+}
+
+.history-speaker-tag[data-speaker="Nurse"],
+.history-speaker-tag[data-speaker="nurse"] {
+    background: #ff9500;
+}
+
+.history-speaker-tag[data-speaker="Other"],
+.history-speaker-tag[data-speaker="other"] {
+    background: #8e8e93;
+}
+
+.transcript-content .history-speaker-tag {
+    margin-bottom: 8px;
+}
